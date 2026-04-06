@@ -36,10 +36,10 @@ Installeer eerst via HACS:
 ### Via HACS (aanbevolen)
 
 1. Ga naar **HACS → Integraties → ⋮ → Aangepaste repositories**
-2. Voeg toe: `https://github.com/JOUW_GITHUB_NAAM/ha-just-leverage-battery`
-3. Categorie: **Integratie**
-4. Zoek **Just Leverage Battery** en installeer
-5. Herstart Home Assistant
+2. Voeg toe: `https://github.com/Tinus-tech/ha-just-leverage-battery`
+4. Categorie: **Integratie**
+5. Zoek **Just Leverage Battery** en installeer
+6. Herstart Home Assistant
 
 ### Handmatig
 
