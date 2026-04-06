@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Just Leverage Battery instellen",
+        "description": "Koppel je Marstek Venus V3 batterij aan de Zonneplan prijsstrategie.",
+        "data": {
+          "marstek_device_id": "Marstek Device ID (kopieer uit Instellingen → Apparaten)",
+          "price_sensor": "Zonneplan prijssensor",
+          "price_forecast_attr": "Forecast attribuut naam",
+          "cheap_hours": "Aantal goedkope uren per dag (laden)",
+          "expensive_hours": "Aantal dure uren per dag (ontladen)",
+          "min_soc": "Minimale SOC % (UPS reserve — niet ontladen hieronder)",
+          "max_soc": "Maximale SOC % (niet laden hierboven)",
+          "charge_power": "Laadvermogen (W)",
+          "discharge_power": "Ontlaadvermogen (W)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Strategie-instellingen aanpassen",
+        "data": {
+          "cheap_hours": "Aantal goedkope uren per dag (laden)",
+          "expensive_hours": "Aantal dure uren per dag (ontladen)",
+          "min_soc": "Minimale SOC %",
+          "max_soc": "Maximale SOC %",
+          "charge_power": "Laadvermogen (W)",
+          "discharge_power": "Ontlaadvermogen (W)"
+        }
+      }
+    }
+  }
+}
