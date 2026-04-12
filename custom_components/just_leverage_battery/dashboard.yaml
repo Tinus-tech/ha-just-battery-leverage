@@ -1,0 +1,121 @@
+title: Batterij Trader
+views:
+  - title: Overzicht
+    path: overzicht
+    icon: mdi:home-battery
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: 🎛️ Handmatige Besturing
+            heading_style: title
+          - type: tile
+            entity: number.just_leverage_battery_marstek_handmatig_vermogen
+            name: Vermogen (negatief = laden)
+            features:
+              - type: numeric-input
+                mode: slider
+            grid_options:
+              columns: 12
+              rows: 2
+          - type: heading
+            heading: ⚡ Strategie
+            heading_style: title
+          - type: tile
+            entity: select.just_leverage_battery_batterij_strategie_kiezer
+            name: Strategie
+            features:
+              - type: select-options
+            grid_options:
+              columns: 12
+              rows: 2
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_laatste_actie
+            name: Laatste Actie
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_soc
+            name: Batterij SOC
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_beslissingsreden
+            name: Reden
+            grid_options:
+              columns: 12
+              rows: 1
+      - type: grid
+        cards:
+          - type: heading
+            heading: 📅 Arbitrage Planning
+            heading_style: title
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_prijs_delta
+            name: Prijs Delta
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_arbitrage_planning
+            name: Planning
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_volgend_laadmoment
+            name: Volgend Laadmoment
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.just_leverage_battery_batterij_volgend_ontlaadmoment
+            name: Volgend Ontlaadmoment
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: entities
+            entities:
+              - entity: sensor.marstek_venus_modbus_ac_vermogen
+              - entity: sensor.marstek_venus_modbus_omvormer_status
+              - entity: select.marstek_venus_modbus_gebruikersmodus
+          - type: gauge
+            entity: sensor.marstek_venus_modbus_batterij_soc
+            needle: true
+      - type: grid
+        cards:
+          - type: heading
+            heading: 🔄 Zelfconsumptie (PID)
+            heading_style: title
+          - type: tile
+            entity: sensor.just_leverage_battery_netwerk_vermogen_gemeten
+            name: Netafname Nu
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.just_leverage_battery_pid_batterijcommando
+            name: PID Commando
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: heading
+            heading: 🕐 Tijdschema
+            heading_style: title
+          - type: tile
+            entity: sensor.just_leverage_battery_tijdschema_actief_blok
+            name: Actief Blok
+            grid_options:
+              columns: 12
+              rows: 1
+    header:
+      card:
+        type: markdown
+        text_only: true
+        content: |-
+          # Hallo {{ user }}
+          Here is a dashboard to manage your battery ✨

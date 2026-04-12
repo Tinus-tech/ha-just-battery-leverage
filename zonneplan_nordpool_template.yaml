@@ -1,0 +1,44 @@
+# Voeg deze sensor toe onder je bestaande template: sectie in configuration.yaml
+# Plak dit blok NA je laatste bestaande sensor (Marstek grid power ontladen)
+#
+#      - name: "Zonneplan als Nordpool"
+#        ... (zie hieronder)
+#
+# NIET als apart !include gebruiken — dat geeft een dubbele template: key
+
+      # Zonneplan forecast omgezet naar Nordpool format (voor ffunes Energy Manager)
+      - name: "Zonneplan als Nordpool"
+        unique_id: zonneplan_as_nordpool
+        state: >
+          {{ states('sensor.zonneplan_current_electricity_tariff') }}
+        unit_of_measurement: "EUR/kWh"
+        device_class: monetary
+        attributes:
+          raw_today: >
+            {% set ns = namespace(items=[]) %}
+            {% set today = now().strftime('%Y-%m-%d') %}
+            {% set forecast = state_attr('sensor.zonneplan_current_electricity_tariff', 'forecast') or [] %}
+            {% for item in forecast %}
+              {% set dt = item.datetime | as_datetime %}
+              {% if dt.strftime('%Y-%m-%d') == today %}
+                {% set start = dt.isoformat() %}
+                {% set end = (dt + timedelta(hours=1)).isoformat() %}
+                {% set value = item.electricity_price / 100000 %}
+                {% set ns.items = ns.items + [{"start": start, "end": end, "value": value}] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.items }}
+          raw_tomorrow: >
+            {% set ns = namespace(items=[]) %}
+            {% set tomorrow = (now() + timedelta(days=1)).strftime('%Y-%m-%d') %}
+            {% set forecast = state_attr('sensor.zonneplan_current_electricity_tariff', 'forecast') or [] %}
+            {% for item in forecast %}
+              {% set dt = item.datetime | as_datetime %}
+              {% if dt.strftime('%Y-%m-%d') == tomorrow %}
+                {% set start = dt.isoformat() %}
+                {% set end = (dt + timedelta(hours=1)).isoformat() %}
+                {% set value = item.electricity_price / 100000 %}
+                {% set ns.items = ns.items + [{"start": start, "end": end, "value": value}] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.items }}

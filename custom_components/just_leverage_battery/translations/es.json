@@ -1,0 +1,145 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurar Just Leverage Battery",
+        "description": "Conecta tu bateria Marstek a la estrategia de precios.",
+        "data": {
+          "marstek_device_id": "Marstek Device ID (copiar desde Ajustes > Dispositivos)",
+          "strategy": "Estrategia",
+          "min_soc": "SOC minimo % (no descargar por debajo)",
+          "max_soc": "SOC maximo % (no cargar por encima)",
+          "charge_power": "Potencia de carga (W)",
+          "discharge_power": "Potencia de descarga (W)"
+        }
+      },
+      "strategy_config": {
+        "title": "Ajustes de estrategia",
+        "description": "Configura los parametros de la estrategia seleccionada.",
+        "data": {
+          "price_sensor": "Sensor de precio de electricidad",
+          "price_forecast_attr": "Nombre del atributo de pronostico",
+          "cheap_hours": "Horas baratas por dia (carga)",
+          "expensive_hours": "Horas caras por dia (descarga)",
+          "min_price_delta": "Delta de precio minimo (EUR/kWh)",
+          "grid_power_sensor": "Sensor de potencia de red (medidor P1)",
+          "target_grid_power": "Potencia de red objetivo (W, 0 = neutro)",
+          "pid_kp": "PID Kp (proporcional)",
+          "pid_ki": "PID Ki (integral)",
+          "pid_kd": "PID Kd (derivativo)",
+          "pid_deadband": "PID banda muerta (W)",
+          "peak_shave_limit": "Limite de recorte de picos (W)",
+          "target_soc": "SOC objetivo (%)",
+          "timed_period_a_start": "Periodo A inicio",
+          "timed_period_a_end": "Periodo A fin",
+          "timed_period_a_strategy": "Periodo A estrategia",
+          "timed_period_b_enabled": "Periodo B activo",
+          "timed_period_b_start": "Periodo B inicio",
+          "timed_period_b_end": "Periodo B fin",
+          "timed_period_b_strategy": "Periodo B estrategia",
+          "timed_period_c_enabled": "Periodo C activo",
+          "timed_period_c_start": "Periodo C inicio",
+          "timed_period_c_end": "Periodo C fin",
+          "timed_period_c_strategy": "Periodo C estrategia"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ajustar configuracion",
+        "description": "Ajusta la configuracion de la bateria y la estrategia.",
+        "data": {
+          "marstek_device_id": "Marstek Device ID",
+          "strategy": "Estrategia",
+          "min_soc": "SOC minimo %",
+          "max_soc": "SOC maximo %",
+          "charge_power": "Potencia de carga (W)",
+          "discharge_power": "Potencia de descarga (W)",
+          "price_sensor": "Sensor de precio de electricidad",
+          "price_forecast_attr": "Nombre del atributo de pronostico",
+          "cheap_hours": "Horas baratas por dia (carga)",
+          "expensive_hours": "Horas caras por dia (descarga)",
+          "min_price_delta": "Delta de precio minimo (EUR/kWh)",
+          "grid_power_sensor": "Sensor de potencia de red (medidor P1)",
+          "target_grid_power": "Potencia de red objetivo (W, 0 = neutro)",
+          "pid_kp": "PID Kp (proporcional)",
+          "pid_ki": "PID Ki (integral)",
+          "pid_kd": "PID Kd (derivativo)",
+          "pid_deadband": "PID banda muerta (W)",
+          "peak_shave_limit": "Limite de recorte de picos (W)",
+          "target_soc": "SOC objetivo (%)",
+          "timed_period_a_start": "Periodo A inicio",
+          "timed_period_a_end": "Periodo A fin",
+          "timed_period_a_strategy": "Periodo A estrategia",
+          "timed_period_b_enabled": "Periodo B activo",
+          "timed_period_b_start": "Periodo B inicio",
+          "timed_period_b_end": "Periodo B fin",
+          "timed_period_b_strategy": "Periodo B estrategia",
+          "timed_period_c_enabled": "Periodo C activo",
+          "timed_period_c_start": "Periodo C inicio",
+          "timed_period_c_end": "Periodo C fin",
+          "timed_period_c_strategy": "Periodo C estrategia"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "strategy": {
+        "name": "Estrategia de comercio"
+      },
+      "last_action": {
+        "name": "Ultima accion"
+      },
+      "last_reason": {
+        "name": "Razon de decision"
+      },
+      "soc": {
+        "name": "SOC de bateria"
+      },
+      "price_delta": {
+        "name": "Delta de precio"
+      },
+      "next_charge": {
+        "name": "Proxima ventana de carga"
+      },
+      "next_discharge": {
+        "name": "Proxima ventana de descarga"
+      },
+      "plan": {
+        "name": "Plan de arbitraje"
+      },
+      "grid_power": {
+        "name": "Potencia de red (medida)"
+      },
+      "pid_power": {
+        "name": "Comando PID de bateria"
+      },
+      "timed_period": {
+        "name": "Bloque de horario activo"
+      }
+    },
+    "select": {
+      "strategy_select": {
+        "name": "Selector de estrategia",
+        "state": {
+          "arbitrage": "Arbitraje (comprar barato / vender caro)",
+          "self_consumption": "Autoconsumo (controlador PID)",
+          "charge_pv": "Carga solar + recorte de picos",
+          "charge": "Cargar hasta SOC objetivo",
+          "sell": "Descargar hasta SOC minimo",
+          "timed": "Horario (periodos A/B/C)",
+          "ups": "UPS en espera (solo monitoreo)",
+          "off": "Apagado (sin control automatico)"
+        }
+      }
+    },
+    "number": {
+      "manual_power": {
+        "name": "Potencia manual"
+      }
+    }
+  }
+}

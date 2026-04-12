@@ -3,17 +3,44 @@
     "step": {
       "user": {
         "title": "Just Leverage Battery instellen",
-        "description": "Koppel je Marstek Venus V3 batterij aan de Zonneplan prijsstrategie.",
+        "description": "Koppel je Marstek batterij aan de prijsstrategie.",
         "data": {
-          "marstek_device_id": "Marstek Device ID (kopieer uit Instellingen → Apparaten)",
-          "price_sensor": "Zonneplan prijssensor",
-          "price_forecast_attr": "Forecast attribuut naam",
-          "cheap_hours": "Aantal goedkope uren per dag (laden)",
-          "expensive_hours": "Aantal dure uren per dag (ontladen)",
-          "min_soc": "Minimale SOC % (UPS reserve — niet ontladen hieronder)",
+          "marstek_device_id": "Marstek Device ID (kopieer uit Instellingen > Apparaten)",
+          "strategy": "Strategie",
+          "min_soc": "Minimale SOC % (niet ontladen hieronder)",
           "max_soc": "Maximale SOC % (niet laden hierboven)",
           "charge_power": "Laadvermogen (W)",
           "discharge_power": "Ontlaadvermogen (W)"
+        }
+      },
+      "strategy_config": {
+        "title": "Strategie-instellingen",
+        "description": "Stel de parameters in voor de gekozen strategie.",
+        "data": {
+          "price_sensor": "Elektriciteitsprijssensor",
+          "price_forecast_attr": "Forecast attribuut naam",
+          "cheap_hours": "Goedkope uren per dag (laden)",
+          "expensive_hours": "Dure uren per dag (ontladen)",
+          "min_price_delta": "Minimale prijs delta (EUR/kWh)",
+          "grid_power_sensor": "Netwerk vermogen sensor (P1 meter)",
+          "target_grid_power": "Doel netafname (W, 0 = neutraal)",
+          "pid_kp": "PID Kp (proportioneel)",
+          "pid_ki": "PID Ki (integraal)",
+          "pid_kd": "PID Kd (differentiaal)",
+          "pid_deadband": "PID deadband (W)",
+          "peak_shave_limit": "Piekvermogen limiet (W)",
+          "target_soc": "Doel SOC (%)",
+          "timed_period_a_start": "Periode A start",
+          "timed_period_a_end": "Periode A einde",
+          "timed_period_a_strategy": "Periode A strategie",
+          "timed_period_b_enabled": "Periode B actief",
+          "timed_period_b_start": "Periode B start",
+          "timed_period_b_end": "Periode B einde",
+          "timed_period_b_strategy": "Periode B strategie",
+          "timed_period_c_enabled": "Periode C actief",
+          "timed_period_c_start": "Periode C start",
+          "timed_period_c_end": "Periode C einde",
+          "timed_period_c_strategy": "Periode C strategie"
         }
       }
     }
@@ -21,15 +48,97 @@
   "options": {
     "step": {
       "init": {
-        "title": "Strategie-instellingen aanpassen",
+        "title": "Instellingen aanpassen",
+        "description": "Pas de batterij-instellingen en strategie aan.",
         "data": {
-          "cheap_hours": "Aantal goedkope uren per dag (laden)",
-          "expensive_hours": "Aantal dure uren per dag (ontladen)",
+          "marstek_device_id": "Marstek Device ID",
+          "strategy": "Strategie",
           "min_soc": "Minimale SOC %",
           "max_soc": "Maximale SOC %",
           "charge_power": "Laadvermogen (W)",
-          "discharge_power": "Ontlaadvermogen (W)"
+          "discharge_power": "Ontlaadvermogen (W)",
+          "price_sensor": "Elektriciteitsprijssensor",
+          "price_forecast_attr": "Forecast attribuut naam",
+          "cheap_hours": "Goedkope uren per dag (laden)",
+          "expensive_hours": "Dure uren per dag (ontladen)",
+          "min_price_delta": "Minimale prijs delta (EUR/kWh)",
+          "grid_power_sensor": "Netwerk vermogen sensor (P1 meter)",
+          "target_grid_power": "Doel netafname (W, 0 = neutraal)",
+          "pid_kp": "PID Kp (proportioneel)",
+          "pid_ki": "PID Ki (integraal)",
+          "pid_kd": "PID Kd (differentiaal)",
+          "pid_deadband": "PID deadband (W)",
+          "peak_shave_limit": "Piekvermogen limiet (W)",
+          "target_soc": "Doel SOC (%)",
+          "timed_period_a_start": "Periode A start",
+          "timed_period_a_end": "Periode A einde",
+          "timed_period_a_strategy": "Periode A strategie",
+          "timed_period_b_enabled": "Periode B actief",
+          "timed_period_b_start": "Periode B start",
+          "timed_period_b_end": "Periode B einde",
+          "timed_period_b_strategy": "Periode B strategie",
+          "timed_period_c_enabled": "Periode C actief",
+          "timed_period_c_start": "Periode C start",
+          "timed_period_c_end": "Periode C einde",
+          "timed_period_c_strategy": "Periode C strategie"
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "strategy": {
+        "name": "Handelsstrategie"
+      },
+      "last_action": {
+        "name": "Laatste actie"
+      },
+      "last_reason": {
+        "name": "Beslissingsreden"
+      },
+      "soc": {
+        "name": "Batterij SOC"
+      },
+      "price_delta": {
+        "name": "Prijs delta"
+      },
+      "next_charge": {
+        "name": "Volgend laadmoment"
+      },
+      "next_discharge": {
+        "name": "Volgend ontlaadmoment"
+      },
+      "plan": {
+        "name": "Arbitrage planning"
+      },
+      "grid_power": {
+        "name": "Netwerk vermogen (gemeten)"
+      },
+      "pid_power": {
+        "name": "PID batterijcommando"
+      },
+      "timed_period": {
+        "name": "Tijdschema actief blok"
+      }
+    },
+    "select": {
+      "strategy_select": {
+        "name": "Strategie kiezer",
+        "state": {
+          "arbitrage": "Arbitrage (goedkoop laden / duur ontladen)",
+          "self_consumption": "Zelfconsumptie (PID regelaar)",
+          "charge_pv": "Zonnepanelen laden + piekbeveiliging",
+          "charge": "Laden tot doel-SOC",
+          "sell": "Ontladen tot minimale SOC",
+          "timed": "Tijdschema (A/B/C periodes)",
+          "ups": "UPS stand-by (alleen bewaken)",
+          "off": "Uit (geen automatische sturing)"
+        }
+      }
+    },
+    "number": {
+      "manual_power": {
+        "name": "Marstek vermogen"
       }
     }
   }

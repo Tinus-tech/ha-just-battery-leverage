@@ -1,11 +1,11 @@
 {
   "domain": "just_leverage_battery",
   "name": "Just Leverage Battery",
-  "version": "1.0.0",
-  "documentation": "https://github.com/JOUW_GITHUB_NAAM/ha-just-leverage-battery",
-  "issue_tracker": "https://github.com/JOUW_GITHUB_NAAM/ha-just-leverage-battery/issues",
+  "version": "1.1.0",
+  "documentation": "https://github.com/Tinus-tech/ha-just-leverage-battery",
+  "issue_tracker": "https://github.com/Tinus-tech/ha-just-leverage-battery/issues",
   "dependencies": [],
-  "codeowners": ["@JOUW_GITHUB_NAAM"],
+  "codeowners": ["@Tinus-tech"],
   "requirements": [],
   "iot_class": "local_polling",
   "config_flow": true
