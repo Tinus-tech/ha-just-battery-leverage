@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
@@ -20,6 +21,8 @@ from .const import (
     CONF_MAX_SOC,
     CONF_CHARGE_POWER,
     CONF_DISCHARGE_POWER,
+    CONF_RAMP_SECONDS,
+    CONF_PRE_CHARGE_MINUTES,
     CONF_STRATEGY,
     CONF_MIN_PRICE_DELTA,
     CONF_GRID_POWER_SENSOR,
@@ -47,6 +50,8 @@ from .const import (
     DEFAULT_MAX_SOC,
     DEFAULT_CHARGE_POWER,
     DEFAULT_DISCHARGE_POWER,
+    DEFAULT_RAMP_SECONDS,
+    DEFAULT_PRE_CHARGE_MINUTES,
     DEFAULT_PRICE_FORECAST_ATTR,
     DEFAULT_STRATEGY,
     DEFAULT_MIN_PRICE_DELTA,
@@ -117,9 +122,18 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         self._last_plan: ArbitragePlan | None = None
         self._last_decision: TradeDecision | None = None
         self._timed_active_period: str = "geen"
-        self._power_slider = None  # set by number.py after platform setup
-        self._last_power_command: int | None = None  # laatste power waarde — voorkomt onnodige Modbus writes
-        self._last_force_mode: str | None = None  # laatste force_mode — voorkomt onnodige Modbus writes
+
+        # Charge/discharge ramp state
+        self._ramp_direction: str = "standby"  # "standby" | "charge" | "discharge"
+        self._ramp_started_at: float | None = None
+
+        # Profit tracking (resets daily at midnight)
+        self._today_charge_cost: float = 0.0
+        self._today_discharge_revenue: float = 0.0
+        self._today_charge_kwh: float = 0.0
+        self._today_discharge_kwh: float = 0.0
+        self._today_date: str = datetime.now().strftime("%Y-%m-%d")
+        self._total_profit: float = 0.0
 
         # PID state
         self._pid_state: PIDState = PIDState()
@@ -146,9 +160,6 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
     def strategy(self, value: str) -> None:
         self._strategy = value
         self._manage_pid_timer()
-        # Opheven handmatige override bij strategiewissel
-        if self._power_slider and self._power_slider.manual_override:
-            self._power_slider.clear_manual_override()
         _LOGGER.info("Strategie gewijzigd naar: %s", value)
 
     def _is_pid_strategy(self, strategy: str) -> bool:
@@ -186,9 +197,6 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
 
     async def _async_pid_tick(self, _now) -> None:
         """Called every 15s when a PID strategy is active."""
-        if self._power_slider and self._power_slider.manual_override:
-            return  # handmatige besturing heeft voorrang
-
         if self._strategy == STRATEGY_SELF_CONSUMPTION:
             await self._run_self_consumption()
         elif self._strategy == STRATEGY_CHARGE_PV:
@@ -206,12 +214,6 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
 
     async def _async_update_data(self) -> dict:
-        # Check manual override
-        if self._power_slider and self._power_slider.manual_override:
-            self._last_action = "handmatig"
-            self._last_reason = f"Handmatige besturing actief ({int(self._power_slider.native_value)}W)"
-            return self._state_dict()
-
         strategy = self._strategy
 
         if strategy == STRATEGY_OFF:
@@ -294,13 +296,81 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             self._last_reason = "Geen geldige prijsdata beschikbaar"
             return
 
+        _LOGGER.debug(
+            "Arbitrage tick: SOC=%.1f%%, decision.action=%s, reason=%s, plan_profitable=%s",
+            current_soc, decision.action, decision.reason,
+            decision.plan.is_profitable if decision.plan else None,
+        )
+
+        # Get current electricity price for charge cost tracking
+        current_price_eur = None
+        try:
+            raw = float(price_state.state)
+            from .strategy import PRICE_UNIT
+            current_price_eur = raw / PRICE_UNIT
+        except (ValueError, TypeError):
+            pass
+
+        # Daily profit reset at midnight
+        today = datetime.now().strftime("%Y-%m-%d")
+        if today != self._today_date:
+            self._total_profit += self._today_discharge_revenue - self._today_charge_cost
+            self._today_charge_cost = 0.0
+            self._today_discharge_revenue = 0.0
+            self._today_charge_kwh = 0.0
+            self._today_discharge_kwh = 0.0
+            self._today_date = today
+
+        # Pre-action: if a charge OR discharge slot starts within pre_charge_minutes,
+        # start that action now. Lets the battery ramp up gradually so it's at full
+        # power when the cheap (or expensive) window actually begins.
+        pre_minutes = int(self._get_conf(CONF_PRE_CHARGE_MINUTES, DEFAULT_PRE_CHARGE_MINUTES))
+        if pre_minutes > 0 and decision.action == "idle" and decision.plan:
+            now_utc = datetime.now(timezone.utc)
+            next_event = None
+            next_event_action = None
+            if decision.plan.next_charge:
+                next_event = decision.plan.next_charge
+                next_event_action = "charge"
+            if decision.plan.next_discharge and (
+                next_event is None or decision.plan.next_discharge.dt < next_event.dt
+            ):
+                next_event = decision.plan.next_discharge
+                next_event_action = "discharge"
+
+            if next_event:
+                seconds_to_event = (next_event.dt - now_utc).total_seconds()
+                if 0 < seconds_to_event <= pre_minutes * 60:
+                    minutes_left = seconds_to_event / 60
+                    decision.action = next_event_action
+                    label = "Voorlaad" if next_event_action == "charge" else "Vooronladen"
+                    slot_label = "laaduur" if next_event_action == "charge" else "ontlaaduur"
+                    decision.reason = (
+                        f"{label} — over {minutes_left:.0f} min start gepland {slot_label} "
+                        f"(€{next_event.price_eur:.3f}/kWh)"
+                    )
+
         if should_charge(decision, current_soc, max_soc):
+            _LOGGER.info("Arbitrage LADEN — SOC=%.1f%%, %s", current_soc, decision.reason)
             await self._set_battery_power(-charge_power)
             self._last_action = "charging"
+            if current_price_eur is not None:
+                kwh_this_tick = charge_power / 1000 * (UPDATE_INTERVAL / 3600)
+                self._today_charge_cost += current_price_eur * kwh_this_tick
+                self._today_charge_kwh += kwh_this_tick
         elif should_discharge(decision, current_soc, min_soc):
+            _LOGGER.info("Arbitrage ONTLADEN — SOC=%.1f%%, %s", current_soc, decision.reason)
             await self._set_battery_power(discharge_power)
             self._last_action = "discharging"
+            if current_price_eur is not None:
+                kwh_this_tick = discharge_power / 1000 * (UPDATE_INTERVAL / 3600)
+                self._today_discharge_revenue += current_price_eur * kwh_this_tick
+                self._today_discharge_kwh += kwh_this_tick
         else:
+            if decision.action == "charge" and current_soc >= max_soc:
+                _LOGGER.info("Arbitrage wou laden maar SOC=%.1f%% >= max %.1f%%", current_soc, max_soc)
+            elif decision.action == "discharge" and current_soc <= min_soc:
+                _LOGGER.info("Arbitrage wou ontladen maar SOC=%.1f%% <= min %.1f%%", current_soc, min_soc)
             await self._stop_battery()
             self._last_action = decision.action
 
@@ -341,10 +411,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             await self._stop_battery()
             self._last_action = "idle"
         elif decision.power_w < 0:
-            await self._set_battery_power(decision.power_w)
+            await self._set_battery_power(decision.power_w, ramp=False)
             self._last_action = "charging"
         else:
-            await self._set_battery_power(decision.power_w)
+            await self._set_battery_power(decision.power_w, ramp=False)
             self._last_action = "discharging"
 
         self._last_reason = decision.reason
@@ -388,10 +458,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             await self._stop_battery()
             self._last_action = "idle"
         elif decision.power_w < 0:
-            await self._set_battery_power(decision.power_w)
+            await self._set_battery_power(decision.power_w, ramp=False)
             self._last_action = "charging"
         else:
-            await self._set_battery_power(decision.power_w)
+            await self._set_battery_power(decision.power_w, ramp=False)
             self._last_action = "discharging"
 
         self._last_reason = decision.reason
@@ -552,13 +622,51 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         except ValueError:
             return None
 
-    async def _set_battery_power(self, power: int) -> None:
+    def _ramp_power(self, target_power: int, ramp: bool) -> int:
+        """Apply linear ramp-up on transitions between standby/charge/discharge.
+
+        On the first tick of a new direction, output starts near 100W and
+        rises linearly to target over CONF_RAMP_SECONDS.  Subsequent ticks
+        in the same direction follow the same curve until target is reached.
+        """
+        if target_power == 0:
+            new_dir = "standby"
+        elif target_power < 0:
+            new_dir = "charge"
+        else:
+            new_dir = "discharge"
+
+        if new_dir != self._ramp_direction:
+            self._ramp_direction = new_dir
+            self._ramp_started_at = time.monotonic() if new_dir != "standby" else None
+
+        if not ramp or new_dir == "standby" or self._ramp_started_at is None:
+            return target_power
+
+        ramp_secs = float(self._get_conf(CONF_RAMP_SECONDS, DEFAULT_RAMP_SECONDS))
+        if ramp_secs <= 0:
+            return target_power
+
+        elapsed = time.monotonic() - self._ramp_started_at
+        if elapsed >= ramp_secs:
+            return target_power
+
+        factor = elapsed / ramp_secs
+        magnitude = abs(target_power) * factor
+        rounded = max(100, round(magnitude / 100) * 100)
+        rounded = min(rounded, abs(target_power))
+        return -rounded if target_power < 0 else rounded
+
+    async def _set_battery_power(self, power: int, ramp: bool = True) -> None:
         """Set the battery to charge/discharge at the given power via ViperRNMC Modbus.
 
         Convention: power < 0 = charging, power > 0 = discharging, power == 0 = standby.
-        Only writes Modbus registers when the value actually changes (no flickering).
+        Sends commands every tick — does not check the current Modbus state.
+        Linear ramp-up is applied on direction changes (charge ↔ discharge ↔ standby);
+        pass ramp=False to skip ramping (used by PID strategies that smooth on their own).
         """
-        # Determine target force_mode and power magnitude
+        power = self._ramp_power(power, ramp)
+
         if power == 0:
             target_mode = FORCE_MODE_STANDBY
             target_power = 0
@@ -572,17 +680,12 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             target_power = power
             power_key = KEY_SET_DISCHARGE_POWER
 
-        # Skip if nothing changed
-        if power == self._last_power_command and target_mode == self._last_force_mode:
-            return
-
         force_mode_entity = self._find_marstek_entity(KEY_FORCE_MODE)
         if not force_mode_entity:
             _LOGGER.warning("Marstek force_mode entity niet gevonden")
             return
 
         try:
-            # First set the power value (only if charging or discharging)
             if power_key is not None:
                 power_entity = self._find_marstek_entity(power_key)
                 if power_entity:
@@ -593,22 +696,13 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                         blocking=True,
                     )
 
-            # Then set the force_mode (only if it changed)
-            if target_mode != self._last_force_mode:
-                await self.hass.services.async_call(
-                    "select",
-                    "select_option",
-                    {"entity_id": force_mode_entity, "option": target_mode},
-                    blocking=True,
-                )
-
-            self._last_power_command = power
-            self._last_force_mode = target_mode
+            await self.hass.services.async_call(
+                "select",
+                "select_option",
+                {"entity_id": force_mode_entity, "option": target_mode},
+                blocking=True,
+            )
             _LOGGER.info("Marstek %s @ %dW", target_mode, target_power)
-
-            # Update slider zodat de gebruiker ziet wat de coordinator stuurt
-            if self._power_slider:
-                self._power_slider.set_coordinator_value(power)
         except Exception as exc:
             _LOGGER.error("Fout bij aansturen Marstek via Modbus: %s", exc)
 
@@ -621,6 +715,18 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
     def _state_dict(self) -> dict:
         plan = self._last_plan
         pid = self._last_pid_decision
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
+
+        def _fmt_plan_time(dt) -> str:
+            local = dt.astimezone()
+            hhmm = local.strftime("%H:%M")
+            if local.date() == today:
+                return hhmm
+            if local.date() == tomorrow:
+                return f"morgen {hhmm}"
+            return local.strftime("%a %d-%m %H:%M")
+
         return {
             "strategy": self._strategy,
             "last_action": self._last_action,
@@ -629,14 +735,21 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             # Arbitrage planning
             "price_delta": round(plan.price_delta_eur, 4) if plan else None,
             "plan_profitable": plan.is_profitable if plan else None,
+            "expected_profit": plan.expected_profit_eur if plan else None,
             "next_charge_start": plan.next_charge.dt.isoformat() if plan and plan.next_charge else None,
             "next_charge_end": plan.charge_window_end.isoformat() if plan and plan.charge_window_end else None,
             "next_discharge_start": plan.next_discharge.dt.isoformat() if plan and plan.next_discharge else None,
             "next_discharge_end": plan.discharge_window_end.isoformat() if plan and plan.discharge_window_end else None,
             "plan_hours": [
-                {"time": h.dt.strftime("%H:%M"), "action": h.action, "price": round(h.price_eur, 4), "soc": h.simulated_soc}
+                {"time": _fmt_plan_time(h.dt), "action": h.action, "price": round(h.price_eur, 4), "soc": h.simulated_soc}
                 for h in plan.hours
             ] if plan else [],
+            "today_profit": round(self._today_discharge_revenue - self._today_charge_cost, 4),
+            "today_revenue": round(self._today_discharge_revenue, 4),
+            "today_cost": round(self._today_charge_cost, 4),
+            "today_charge_kwh": round(self._today_charge_kwh, 2),
+            "today_discharge_kwh": round(self._today_discharge_kwh, 2),
+            "total_profit": round(self._total_profit + self._today_discharge_revenue - self._today_charge_cost, 4),
             # PID / self-consumption
             "pid_grid_power": round(pid.grid_power, 1) if pid else None,
             "pid_power_w": pid.power_w if pid else None,

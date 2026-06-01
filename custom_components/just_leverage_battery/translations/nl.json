@@ -119,6 +119,12 @@
       },
       "timed_period": {
         "name": "Tijdschema actief blok"
+      },
+      "today_profit": {
+        "name": "Winst vandaag"
+      },
+      "total_profit": {
+        "name": "Totale winst"
       }
     },
     "select": {
@@ -134,11 +140,6 @@
           "ups": "UPS stand-by (alleen bewaken)",
           "off": "Uit (geen automatische sturing)"
         }
-      }
-    },
-    "number": {
-      "manual_power": {
-        "name": "Marstek vermogen"
       }
     }
   }

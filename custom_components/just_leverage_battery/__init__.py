@@ -15,7 +15,7 @@ from .coordinator import MarstekBatteryTraderCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "select", "number"]
+PLATFORMS = ["sensor", "select"]
 DASHBOARD_URL_PATH = "just-leverage-battery"
 
 

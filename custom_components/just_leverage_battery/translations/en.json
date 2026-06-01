@@ -119,6 +119,12 @@
       },
       "timed_period": {
         "name": "Schedule active block"
+      },
+      "today_profit": {
+        "name": "Today's profit"
+      },
+      "total_profit": {
+        "name": "Total profit"
       }
     },
     "select": {
@@ -134,11 +140,6 @@
           "ups": "UPS standby (monitor only)",
           "off": "Off (no automatic control)"
         }
-      }
-    },
-    "number": {
-      "manual_power": {
-        "name": "Manual power"
       }
     }
   }

@@ -119,6 +119,12 @@
       },
       "timed_period": {
         "name": "Bloque de horario activo"
+      },
+      "today_profit": {
+        "name": "Ganancia de hoy"
+      },
+      "total_profit": {
+        "name": "Ganancia total"
       }
     },
     "select": {
@@ -134,11 +140,6 @@
           "ups": "UPS en espera (solo monitoreo)",
           "off": "Apagado (sin control automatico)"
         }
-      }
-    },
-    "number": {
-      "manual_power": {
-        "name": "Potencia manual"
       }
     }
   }

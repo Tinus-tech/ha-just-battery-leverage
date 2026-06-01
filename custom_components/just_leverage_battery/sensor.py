@@ -32,6 +32,8 @@ async def async_setup_entry(
         MarstekGridPowerSensor(coordinator, config_entry),
         MarstekPidPowerSensor(coordinator, config_entry),
         MarstekTimedPeriodSensor(coordinator, config_entry),
+        MarstekTodayProfitSensor(coordinator, config_entry),
+        MarstekTotalProfitSensor(coordinator, config_entry),
     ])
 
 
@@ -178,7 +180,10 @@ class MarstekPlanSensor(_Base):
 
     @property
     def extra_state_attributes(self):
-        return {"hours": self._get("plan_hours", [])}
+        return {
+            "hours": self._get("plan_hours", []),
+            "expected_profit": self._get("expected_profit"),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +232,40 @@ class MarstekTimedPeriodSensor(_Base):
     @property
     def native_value(self):
         return self._get("timed_active_period", "geen")
+
+
+# ---------------------------------------------------------------------------
+# Profit tracking sensors
+# ---------------------------------------------------------------------------
+
+class MarstekTodayProfitSensor(_Base):
+    def __init__(self, coordinator, config_entry):
+        super().__init__(coordinator, config_entry, "today_profit", "today_profit", "mdi:cash-plus")
+        self._attr_native_unit_of_measurement = "EUR"
+        self._attr_device_class = SensorDeviceClass.MONETARY
+        self._attr_state_class = SensorStateClass.TOTAL
+
+    @property
+    def native_value(self):
+        return self._get("today_profit", 0)
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "revenue": self._get("today_revenue", 0),
+            "cost": self._get("today_cost", 0),
+            "charged_kwh": self._get("today_charge_kwh", 0),
+            "discharged_kwh": self._get("today_discharge_kwh", 0),
+        }
+
+
+class MarstekTotalProfitSensor(_Base):
+    def __init__(self, coordinator, config_entry):
+        super().__init__(coordinator, config_entry, "total_profit", "total_profit", "mdi:cash-multiple")
+        self._attr_native_unit_of_measurement = "EUR"
+        self._attr_device_class = SensorDeviceClass.MONETARY
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    @property
+    def native_value(self):
+        return self._get("total_profit", 0)

@@ -40,6 +40,8 @@ CONF_MIN_SOC = "min_soc"
 CONF_MAX_SOC = "max_soc"
 CONF_CHARGE_POWER = "charge_power"
 CONF_DISCHARGE_POWER = "discharge_power"
+CONF_RAMP_SECONDS = "ramp_seconds"
+CONF_PRE_CHARGE_MINUTES = "pre_charge_minutes"
 CONF_STRATEGY = "strategy"
 
 # Config keys — arbitrage
@@ -79,6 +81,8 @@ DEFAULT_MIN_SOC = 10
 DEFAULT_MAX_SOC = 95
 DEFAULT_CHARGE_POWER = 2000
 DEFAULT_DISCHARGE_POWER = 2000
+DEFAULT_RAMP_SECONDS = 1800   # 30 min linear ramp from 100W to target on start
+DEFAULT_PRE_CHARGE_MINUTES = 60  # start charging this many minutes before next planned charge slot
 
 # Defaults — arbitrage
 DEFAULT_CHEAP_HOURS = 4

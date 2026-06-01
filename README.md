@@ -1,5 +1,7 @@
 # Just Leverage Battery
 
+<img src="https://raw.githubusercontent.com/home-assistant/brands/master/custom_integrations/smart_charger/icon.png" alt="Just Leverage Battery" width="128">
+
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![GitHub Release](https://img.shields.io/github/v/release/Tinus-tech/ha-just-battery-leverage)](https://github.com/Tinus-tech/ha-just-battery-leverage/releases)
 
