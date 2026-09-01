@@ -38,6 +38,7 @@ class ArbitragePlan:
     is_profitable: bool = False
     expected_profit_eur: float = 0.0
     unprofitable_reason: str = ""
+    slot_hours: float = 1.0  # slot duration (1.0 = hourly, 0.25 = quarter-hourly)
 
     @property
     def next_charge(self) -> PlannedHour | None:
@@ -70,7 +71,7 @@ class ArbitragePlan:
                 in_block = True
             elif in_block:
                 break
-        return end_dt + timedelta(hours=1)
+        return end_dt + timedelta(hours=self.slot_hours)
 
     @property
     def discharge_window_end(self) -> datetime | None:
@@ -87,7 +88,7 @@ class ArbitragePlan:
                 in_block = True
             elif in_block:
                 break
-        return end_dt + timedelta(hours=1)
+        return end_dt + timedelta(hours=self.slot_hours)
 
 
 @dataclass
@@ -380,16 +381,40 @@ def resolve_timed_strategy(
 # ---------------------------------------------------------------------------
 
 def _parse_slots(forecast_raw: list) -> list[PriceSlot]:
+    """Parse Zonneplan forecast items into PriceSlot objects.
+
+    Handles both legacy (string ISO datetime) and current (datetime object)
+    formats.  Also robust against new 15-minute-interval forecasts.
+    """
     slots = []
     for item in forecast_raw:
         try:
-            dt_str = item.get("datetime", "")
+            dt_val = item.get("datetime", "")
             price_raw = float(item.get("electricity_price", 0))
-            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            if isinstance(dt_val, datetime):
+                dt = dt_val
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = datetime.fromisoformat(str(dt_val).replace("Z", "+00:00"))
             slots.append(PriceSlot(dt=dt, price_raw=price_raw, price_eur=price_raw / PRICE_UNIT))
         except Exception as exc:
             _LOGGER.debug("Overgeslagen forecast item %s: %s", item, exc)
     return slots
+
+
+def _detect_slot_hours(slots: list[PriceSlot]) -> float:
+    """Detect the slot duration in hours from consecutive timestamps.
+
+    Zonneplan changed from 1h to 15min slots (0.25h).  We derive it dynamically
+    so both formats work.
+    """
+    if len(slots) < 2:
+        return 1.0
+    delta = (slots[1].dt - slots[0].dt).total_seconds() / 3600
+    if delta <= 0:
+        return 1.0
+    return delta
 
 
 def _frange(start: float, stop: float, step: float):
@@ -427,10 +452,15 @@ class _BatteryModel:
 
     @staticmethod
     def build(min_soc, max_soc, charge_power_w, discharge_power_w,
-              capacity_wh, round_trip_efficiency) -> "_BatteryModel":
+              capacity_wh, round_trip_efficiency, slot_hours: float = 1.0) -> "_BatteryModel":
+        """Build a battery model where every slot lasts ``slot_hours`` hours.
+
+        Zonneplan forecasts used to be 1h slots but are now 0.25h (15 min).
+        Energy per slot = power × slot_hours, and SOC deltas scale accordingly.
+        """
         capacity_kwh = capacity_wh / 1000
-        charge_kwh = charge_power_w / 1000   # AC grid input
-        discharge_kwh = discharge_power_w / 1000  # AC grid output
+        charge_kwh = (charge_power_w / 1000) * slot_hours   # AC grid input per slot
+        discharge_kwh = (discharge_power_w / 1000) * slot_hours  # AC grid output per slot
         efficiency = round_trip_efficiency ** 0.5
         soc_levels = list(_frange(min_soc, max_soc, 1.0))
         if not soc_levels or soc_levels[-1] < max_soc:
@@ -622,12 +652,16 @@ def compute_arbitrage_plan(
     """
     plan = ArbitragePlan()
     now = datetime.now(timezone.utc)
-    current_hour = now.replace(minute=0, second=0, microsecond=0)
     all_slots = _parse_slots(forecast_raw)
-    future_slots = sorted(
-        [s for s in all_slots if s.dt >= current_hour],
-        key=lambda s: s.dt,
-    )
+    all_slots.sort(key=lambda s: s.dt)
+
+    # Detect slot duration (Zonneplan: 1.0h old, 0.25h new)
+    slot_hours = _detect_slot_hours(all_slots)
+    plan.slot_hours = slot_hours
+
+    # Keep only slots that end AFTER now (so the currently-active slot is included)
+    slot_delta = timedelta(hours=slot_hours)
+    future_slots = [s for s in all_slots if s.dt + slot_delta > now]
 
     if not future_slots:
         return plan
@@ -636,7 +670,7 @@ def compute_arbitrage_plan(
     plan.price_delta_eur = sorted_by_price[-1].price_eur - sorted_by_price[0].price_eur
 
     bm = _BatteryModel.build(min_soc, max_soc, charge_power_w, discharge_power_w,
-                             battery_capacity_wh, round_trip_efficiency)
+                             battery_capacity_wh, round_trip_efficiency, slot_hours=slot_hours)
     start_soc = bm.snap_soc(current_soc)
     start_soc_idx = bm.soc_to_idx[start_soc]
 
@@ -722,14 +756,16 @@ def parse_zonneplan_forecast(
         discharge_power_w=discharge_power_w,
     )
 
-    now_hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    # Find the plan slot whose window CONTAINS 'now' — works for both 1h and 15min slots.
+    now_utc = datetime.now(timezone.utc)
+    slot_delta = timedelta(hours=plan.slot_hours)
     current = next(
-        (h for h in plan.hours if h.dt.strftime("%Y-%m-%dT%H") == now_hour),
+        (h for h in plan.hours if h.dt <= now_utc < h.dt + slot_delta),
         None,
     )
 
     if current is None:
-        return TradeDecision(action="idle", power_w=0, reason="Huidig uur niet in forecast", plan=plan)
+        return TradeDecision(action="idle", power_w=0, reason="Huidig slot niet in forecast", plan=plan)
 
     if not plan.is_profitable:
         reason = plan.unprofitable_reason or f"Niet winstgevend (delta €{plan.price_delta_eur:.3f}/kWh)"

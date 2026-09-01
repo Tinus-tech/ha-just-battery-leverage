@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -52,6 +53,8 @@ from .const import (
     DEFAULT_DISCHARGE_POWER,
     DEFAULT_RAMP_SECONDS,
     DEFAULT_PRE_CHARGE_MINUTES,
+    DEFAULT_PRE_ACTION_FLIP_COOLDOWN,
+    DEFAULT_MIN_ACTION_SECONDS,
     DEFAULT_PRICE_FORECAST_ATTR,
     DEFAULT_STRATEGY,
     DEFAULT_MIN_PRICE_DELTA,
@@ -69,7 +72,6 @@ from .const import (
     KEY_BATTERY_SOC,
     KEY_FORCE_MODE,
     KEY_USER_WORK_MODE,
-    KEY_RS485_CONTROL_MODE,
     KEY_SET_CHARGE_POWER,
     KEY_SET_DISCHARGE_POWER,
     FORCE_MODE_STANDBY,
@@ -105,6 +107,29 @@ from .strategy import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Persistent diagnostic log — survives HA restarts and log rotation.
+# Each instance appends; entry_id distinguishes instances.
+_DIAG_PATH = "/config/jlb_diag.log"
+_DIAG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB → rotate to .old
+
+
+def _diag_write(entry_id: str, message: str) -> None:
+    """Append a timestamped diagnostic line to the persistent log."""
+    try:
+        # Simple rotation: rename file when too big
+        try:
+            if os.path.getsize(_DIAG_PATH) > _DIAG_MAX_BYTES:
+                os.replace(_DIAG_PATH, _DIAG_PATH + ".old")
+        except OSError:
+            pass
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        short_id = entry_id[:8]
+        with open(_DIAG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{ts} [{short_id}] {message}\n")
+    except OSError as exc:
+        _LOGGER.debug("Kon diag-log niet schrijven: %s", exc)
+
+
 PID_STRATEGIES = (STRATEGY_SELF_CONSUMPTION, STRATEGY_CHARGE_PV)
 
 
@@ -126,6 +151,12 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         # Charge/discharge ramp state
         self._ramp_direction: str = "standby"  # "standby" | "charge" | "discharge"
         self._ramp_started_at: float | None = None
+
+        # Last ACTIVE direction (charge|discharge) — survives standby ticks so the
+        # pre-action cooldown can detect "we recently did opposite". Updated only
+        # on transitions to an active direction; persists across idle gaps.
+        self._last_active_direction: str | None = None
+        self._last_active_at: float | None = None
 
         # Profit tracking (resets daily at midnight)
         self._today_charge_cost: float = 0.0
@@ -217,9 +248,13 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         strategy = self._strategy
 
         if strategy == STRATEGY_OFF:
-            await self._stop_battery()
+            # Hands-off mode: do NOT write to Modbus. User can manually control
+            # the Marstek (via the marstek_modbus selects) without interference.
+            # Reset ramp state so a future strategy switch starts fresh.
+            self._ramp_direction = "standby"
+            self._ramp_started_at = None
             self._last_action = "off"
-            self._last_reason = "Strategie staat op Uit"
+            self._last_reason = "Strategie staat op Uit — geen Modbus writes (handmatige bediening mogelijk)"
             return self._state_dict()
 
         if strategy == STRATEGY_UPS:
@@ -301,6 +336,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             current_soc, decision.action, decision.reason,
             decision.plan.is_profitable if decision.plan else None,
         )
+        _diag_write(
+            self.config_entry.entry_id,
+            f"TICK SOC={current_soc:.1f}% action={decision.action} reason={decision.reason!r}",
+        )
 
         # Get current electricity price for charge cost tracking
         current_price_eur = None
@@ -324,6 +363,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         # Pre-action: if a charge OR discharge slot starts within pre_charge_minutes,
         # start that action now. Lets the battery ramp up gradually so it's at full
         # power when the cheap (or expensive) window actually begins.
+        #
+        # Stability checks to prevent rapid flipping when DP plan wavers near boundaries:
+        # (B) FLIP cooldown — if we recently commanded the OPPOSITE direction, skip
+        # (D) Don't pre-action against an active opposite ramp
         pre_minutes = int(self._get_conf(CONF_PRE_CHARGE_MINUTES, DEFAULT_PRE_CHARGE_MINUTES))
         if pre_minutes > 0 and decision.action == "idle" and decision.plan:
             now_utc = datetime.now(timezone.utc)
@@ -341,14 +384,86 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             if next_event:
                 seconds_to_event = (next_event.dt - now_utc).total_seconds()
                 if 0 < seconds_to_event <= pre_minutes * 60:
-                    minutes_left = seconds_to_event / 60
-                    decision.action = next_event_action
-                    label = "Voorlaad" if next_event_action == "charge" else "Vooronladen"
-                    slot_label = "laaduur" if next_event_action == "charge" else "ontlaaduur"
-                    decision.reason = (
-                        f"{label} — over {minutes_left:.0f} min start gepland {slot_label} "
-                        f"(€{next_event.price_eur:.3f}/kWh)"
+                    # Cooldown: skip pre-action if we recently did the OPPOSITE direction.
+                    # Uses _last_active_* which survives standby ticks (unlike _ramp_*).
+                    opposite = "discharge" if next_event_action == "charge" else "charge"
+                    cooldown_active = False
+                    if (
+                        self._last_active_direction == opposite
+                        and self._last_active_at is not None
+                    ):
+                        elapsed = time.monotonic() - self._last_active_at
+                        if elapsed < DEFAULT_PRE_ACTION_FLIP_COOLDOWN:
+                            cooldown_active = True
+                            _LOGGER.info(
+                                "Pre-action %s OVERGESLAGEN — laatste %s %.0fs geleden (cooldown %ds)",
+                                next_event_action, opposite, elapsed, DEFAULT_PRE_ACTION_FLIP_COOLDOWN,
+                            )
+                            _diag_write(
+                                self.config_entry.entry_id,
+                                f"PREACTION_SKIP target={next_event_action} "
+                                f"last_active={opposite} elapsed={elapsed:.0f}s",
+                            )
+
+                    if not cooldown_active:
+                        minutes_left = seconds_to_event / 60
+                        decision.action = next_event_action
+                        label = "Voorlaad" if next_event_action == "charge" else "Vooronladen"
+                        slot_label = "laaduur" if next_event_action == "charge" else "ontlaaduur"
+                        decision.reason = (
+                            f"{label} — over {minutes_left:.0f} min start gepland {slot_label} "
+                            f"(€{next_event.price_eur:.3f}/kWh)"
+                        )
+
+        # Post-decision anti-flip: two protections working together.
+        #
+        # (a) Minimum action duration: once we start charge/discharge, commit for
+        #     at least MIN_ACTION_SECONDS. If DP wants to switch to the opposite,
+        #     keep going instead — unless a SOC limit blocks it.
+        #
+        # (b) Cooldown on flips (existing): even beyond minimum duration, block a
+        #     direct reversal within the cooldown window.
+        if decision.action in ("charge", "discharge") and self._last_active_direction is not None:
+            opposite = "discharge" if decision.action == "charge" else "charge"
+            if self._last_active_direction == opposite and self._last_active_at is not None:
+                elapsed = time.monotonic() - self._last_active_at
+                sticky_action = self._last_active_direction  # keep doing this
+
+                # Can we still do sticky? (SOC limits)
+                soc_blocks_sticky = (
+                    (sticky_action == "charge" and current_soc >= max_soc) or
+                    (sticky_action == "discharge" and current_soc <= min_soc)
+                )
+
+                if elapsed < DEFAULT_MIN_ACTION_SECONDS and not soc_blocks_sticky:
+                    # Keep doing the previous action — don't flip yet
+                    _LOGGER.info(
+                        "Anti-flip: houd %s vast (%.0fs / %ds minimum), DP wou %s",
+                        sticky_action, elapsed, DEFAULT_MIN_ACTION_SECONDS, decision.action,
                     )
+                    _diag_write(
+                        self.config_entry.entry_id,
+                        f"STICKY keep={sticky_action} elapsed={elapsed:.0f}s "
+                        f"min={DEFAULT_MIN_ACTION_SECONDS}s (DP wanted {decision.action})",
+                    )
+                    decision.action = sticky_action
+                    decision.reason = (
+                        f"Anti-flip: {sticky_action} vasthouden ({elapsed:.0f}s / "
+                        f"{DEFAULT_MIN_ACTION_SECONDS}s minimum)"
+                    )
+                elif elapsed < DEFAULT_PRE_ACTION_FLIP_COOLDOWN and soc_blocks_sticky:
+                    # Sticky would violate SOC — fall to idle, don't flip immediately
+                    _LOGGER.info(
+                        "Anti-flip: %s→%s geblokkeerd (SOC-limiet), blijf idle",
+                        sticky_action, decision.action,
+                    )
+                    _diag_write(
+                        self.config_entry.entry_id,
+                        f"ACTION_BLOCK target={decision.action} last_active={sticky_action} "
+                        f"SOC-limit → idle",
+                    )
+                    decision.action = "idle"
+                    decision.reason = f"Cooldown: {sticky_action} klaar, wacht voor {decision.action}"
 
         if should_charge(decision, current_soc, max_soc):
             _LOGGER.info("Arbitrage LADEN — SOC=%.1f%%, %s", current_soc, decision.reason)
@@ -639,6 +754,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         if new_dir != self._ramp_direction:
             self._ramp_direction = new_dir
             self._ramp_started_at = time.monotonic() if new_dir != "standby" else None
+            # Track last active direction separately — survives standby gaps
+            if new_dir in ("charge", "discharge"):
+                self._last_active_direction = new_dir
+                self._last_active_at = time.monotonic()
 
         if not ramp or new_dir == "standby" or self._ramp_started_at is None:
             return target_power
@@ -667,10 +786,17 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         """
         power = self._ramp_power(power, ramp)
 
+        # Determine target. NOTE: when going to idle (power==0) we intentionally do
+        # NOT try to write force_mode="stop" — some Marstek firmware/versions reject
+        # that value with `not_valid_option`, causing endless error spam. Instead we
+        # only zero out both power set-points. The Marstek then sits at 0W regardless
+        # of what direction its force_mode still shows.
+        write_force_mode = True
         if power == 0:
             target_mode = FORCE_MODE_STANDBY
             target_power = 0
             power_key = None
+            write_force_mode = False  # leave force_mode alone; zero power = effectively idle
         elif power < 0:
             target_mode = FORCE_MODE_CHARGE
             target_power = abs(power)
@@ -685,26 +811,90 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Marstek force_mode entity niet gevonden")
             return
 
+        # Diagnostic: log observed Marstek state BEFORE we write anything
+        observed_force_mode = self._cached_state(force_mode_entity)
+        user_mode_entity = self._find_marstek_entity(KEY_USER_WORK_MODE)
+        observed_user_mode = self._cached_state(user_mode_entity) if user_mode_entity else None
+        # Also capture actual power and AC measurement for diagnostic purposes
+        ac_power_entity = self._find_marstek_entity("ac_power")
+        battery_power_entity = self._find_marstek_entity("battery_power")
+        observed_ac_power = self._cached_number(ac_power_entity) if ac_power_entity else None
+        observed_battery_power = self._cached_number(battery_power_entity) if battery_power_entity else None
+
+        _LOGGER.info(
+            "Marstek observed: force_mode=%s, user_work_mode=%s | target: force_mode=%s @ %dW",
+            observed_force_mode, observed_user_mode, target_mode, target_power,
+        )
+        _diag_write(
+            self.config_entry.entry_id,
+            f"OBSERVED force={observed_force_mode} usermode={observed_user_mode} "
+            f"ac_power={observed_ac_power}W batt_power={observed_battery_power}W "
+            f"| TARGET force={target_mode} @ {target_power}W",
+        )
+
         try:
-            if power_key is not None:
-                power_entity = self._find_marstek_entity(power_key)
-                if power_entity:
+            written = []
+
+            # NOTE: we intentionally do NOT touch user_work_mode anymore.
+            # Marstek's anti_feed is the normal default and force_mode commands
+            # override it as needed. Forcing user_work_mode=manual broke things.
+
+            # Charge/discharge power only when not yet at target value.
+            # When going to idle (power_key is None), zero out BOTH power set-points
+            # so nothing lingers in the wrong direction.
+            keys_to_zero = [KEY_SET_CHARGE_POWER, KEY_SET_DISCHARGE_POWER] if power_key is None else [power_key]
+            for key in keys_to_zero:
+                power_entity = self._find_marstek_entity(key)
+                if not power_entity:
+                    continue
+                cached_power = self._cached_number(power_entity)
+                desired = target_power if key == power_key else 0
+                if cached_power != desired:
                     await self.hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {"entity_id": power_entity, "value": float(target_power)},
+                        "number", "set_value",
+                        {"entity_id": power_entity, "value": float(desired)},
                         blocking=True,
                     )
+                    written.append(f"{key}={desired}W (was {cached_power})")
 
-            await self.hass.services.async_call(
-                "select",
-                "select_option",
-                {"entity_id": force_mode_entity, "option": target_mode},
-                blocking=True,
-            )
-            _LOGGER.info("Marstek %s @ %dW", target_mode, target_power)
+            # Force_mode only when we want to switch it AND it's not yet at target.
+            # write_force_mode=False for idle avoids the "not_valid_option" error some
+            # Marstek versions throw when writing "stop".
+            if write_force_mode and observed_force_mode != target_mode:
+                await self.hass.services.async_call(
+                    "select", "select_option",
+                    {"entity_id": force_mode_entity, "option": target_mode},
+                    blocking=True,
+                )
+                written.append(f"force_mode={target_mode} (was {observed_force_mode})")
+
+            if written:
+                _LOGGER.info("Marstek writes: %s", "; ".join(written))
+                _diag_write(self.config_entry.entry_id, f"WRITE {'; '.join(written)}")
+            else:
+                _LOGGER.debug("Marstek %s @ %dW — al juiste state, skip writes",
+                              target_mode, target_power)
+                _diag_write(self.config_entry.entry_id, f"SKIP target={target_mode}@{target_power}W (already correct)")
         except Exception as exc:
             _LOGGER.error("Fout bij aansturen Marstek via Modbus: %s", exc)
+            _diag_write(self.config_entry.entry_id, f"ERROR {exc}")
+
+    def _cached_state(self, entity_id: str) -> str | None:
+        """Return HA's cached state for entity, or None if unavailable."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        return state.state
+
+    def _cached_number(self, entity_id: str) -> int | None:
+        """Return HA's cached numeric state, or None if unavailable."""
+        raw = self._cached_state(entity_id)
+        if raw is None:
+            return None
+        try:
+            return int(float(raw))
+        except (ValueError, TypeError):
+            return None
 
     async def _stop_battery(self) -> None:
         """Set battery to standby (idle) — used at idle states."""

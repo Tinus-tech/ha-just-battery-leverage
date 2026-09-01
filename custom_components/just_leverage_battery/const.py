@@ -83,6 +83,8 @@ DEFAULT_CHARGE_POWER = 2000
 DEFAULT_DISCHARGE_POWER = 2000
 DEFAULT_RAMP_SECONDS = 1800   # 30 min linear ramp from 100W to target on start
 DEFAULT_PRE_CHARGE_MINUTES = 60  # start charging this many minutes before next planned charge slot
+DEFAULT_PRE_ACTION_FLIP_COOLDOWN = 300  # 5 min: skip pre-action if we did the opposite direction this recently
+DEFAULT_MIN_ACTION_SECONDS = 900  # 15 min: once charge/discharge started, commit for at least this long
 
 # Defaults — arbitrage
 DEFAULT_CHEAP_HOURS = 4
@@ -118,10 +120,15 @@ KEY_RS485_CONTROL_MODE = "rs485_control_mode"
 KEY_SET_CHARGE_POWER = "set_charge_power"
 KEY_SET_DISCHARGE_POWER = "set_discharge_power"
 
-# force_mode select options
-FORCE_MODE_STANDBY = "standby"
+# force_mode select options (ViperRNMC marstek_modbus values)
+FORCE_MODE_STANDBY = "stop"
 FORCE_MODE_CHARGE = "charge"
 FORCE_MODE_DISCHARGE = "discharge"
+
+# user_work_mode must be "manual" for force_mode writes to take effect.
+# In "anti_feed" or "trade_mode" the Marstek overrides our force_mode commands,
+# causing oscillation (battery flips between commanded action and anti-feed default).
+USER_WORK_MODE_MANUAL = "manual"
 
 # Update intervals
 UPDATE_INTERVAL = 60           # seconds — main coordinator
