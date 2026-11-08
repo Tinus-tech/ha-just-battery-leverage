@@ -533,20 +533,26 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
 
         if should_charge(decision, current_soc, max_soc):
             _LOGGER.info("Arbitrage LADEN — SOC=%.1f%%, %s", current_soc, decision.reason)
-            await self._set_battery_power(-charge_power)
-            self._last_action = "charging"
-            if current_price_eur is not None:
-                kwh_this_tick = charge_power / 1000 * (UPDATE_INTERVAL / 3600)
-                self._today_charge_cost += current_price_eur * kwh_this_tick
-                self._today_charge_kwh += kwh_this_tick
+            if await self._set_battery_power(-charge_power):
+                self._last_action = "charging"
+                if current_price_eur is not None:
+                    kwh_this_tick = charge_power / 1000 * (UPDATE_INTERVAL / 3600)
+                    self._today_charge_cost += current_price_eur * kwh_this_tick
+                    self._today_charge_kwh += kwh_this_tick
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
         elif should_discharge(decision, current_soc, min_soc):
             _LOGGER.info("Arbitrage ONTLADEN — SOC=%.1f%%, %s", current_soc, decision.reason)
-            await self._set_battery_power(discharge_power)
-            self._last_action = "discharging"
-            if current_price_eur is not None:
-                kwh_this_tick = discharge_power / 1000 * (UPDATE_INTERVAL / 3600)
-                self._today_discharge_revenue += current_price_eur * kwh_this_tick
-                self._today_discharge_kwh += kwh_this_tick
+            if await self._set_battery_power(discharge_power):
+                self._last_action = "discharging"
+                if current_price_eur is not None:
+                    kwh_this_tick = discharge_power / 1000 * (UPDATE_INTERVAL / 3600)
+                    self._today_discharge_revenue += current_price_eur * kwh_this_tick
+                    self._today_discharge_kwh += kwh_this_tick
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
         else:
             if decision.action == "charge" and current_soc >= max_soc:
                 _LOGGER.info("Arbitrage wou laden maar SOC=%.1f%% >= max %.1f%%", current_soc, max_soc)
@@ -598,11 +604,17 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             await self._stop_battery()
             self._last_action = "idle"
         elif decision.power_w < 0:
-            await self._set_battery_power(decision.power_w)
-            self._last_action = "charging"
+            if await self._set_battery_power(decision.power_w):
+                self._last_action = "charging"
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
         else:
-            await self._set_battery_power(decision.power_w)
-            self._last_action = "discharging"
+            if await self._set_battery_power(decision.power_w):
+                self._last_action = "discharging"
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
 
         self._last_reason = decision.reason
 
@@ -651,11 +663,17 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             await self._stop_battery()
             self._last_action = "idle"
         elif decision.power_w < 0:
-            await self._set_battery_power(decision.power_w)
-            self._last_action = "charging"
+            if await self._set_battery_power(decision.power_w):
+                self._last_action = "charging"
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
         else:
-            await self._set_battery_power(decision.power_w)
-            self._last_action = "discharging"
+            if await self._set_battery_power(decision.power_w):
+                self._last_action = "discharging"
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
 
         self._last_reason = decision.reason
 
@@ -675,8 +693,11 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         decision = compute_charge_to_target(current_soc, target_soc, max_soc, charge_power)
 
         if decision.action == "charge":
-            await self._set_battery_power(-charge_power)
-            self._last_action = "charging"
+            if await self._set_battery_power(-charge_power):
+                self._last_action = "charging"
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
         else:
             await self._stop_battery()
             self._last_action = "idle"
@@ -699,8 +720,11 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         decision = compute_sell_to_target(current_soc, target_soc, min_soc, discharge_power)
 
         if decision.action == "discharge":
-            await self._set_battery_power(discharge_power)
-            self._last_action = "discharging"
+            if await self._set_battery_power(discharge_power):
+                self._last_action = "discharging"
+            else:
+                self._last_action = "error"
+                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
         else:
             await self._stop_battery()
             self._last_action = "idle"
@@ -838,12 +862,19 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 self._last_active_direction = new_dir
                 self._last_active_at = time.monotonic()
 
-    async def _set_battery_power(self, power: int) -> None:
+    async def _set_battery_power(self, power: int) -> bool:
         """Set the battery to charge/discharge at the given power via ViperRNMC Modbus.
 
         Convention: power < 0 = charging, power > 0 = discharging, power == 0 = standby.
         Sends commands every tick — does not check the current Modbus state.
         Commands go out at full requested power immediately (no ramp-up).
+
+        Returns True if the command succeeded (or no write was needed because
+        the Marstek was already at the target state), False if the write
+        failed or the force_mode entity could not be found. Callers must
+        check this before reporting "charging"/"discharging" — a rejected
+        Modbus write (e.g. a power value the device refuses) must not be
+        shown as if it succeeded.
         """
         self._track_direction(power)
 
@@ -870,7 +901,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         force_mode_entity = self._find_marstek_entity(KEY_FORCE_MODE)
         if not force_mode_entity:
             _LOGGER.warning("Marstek force_mode entity niet gevonden")
-            return
+            return False
 
         # Diagnostic: log observed Marstek state BEFORE we write anything
         observed_force_mode = self._cached_state(force_mode_entity)
@@ -936,9 +967,11 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Marstek %s @ %dW — al juiste state, skip writes",
                               target_mode, target_power)
                 _diag_write(self.config_entry.entry_id, f"SKIP target={target_mode}@{target_power}W (already correct)")
+            return True
         except Exception as exc:
-            _LOGGER.error("Fout bij aansturen Marstek via Modbus: %s", exc)
+            _LOGGER.exception("Fout bij aansturen Marstek via Modbus")
             _diag_write(self.config_entry.entry_id, f"ERROR {exc}")
+            return False
 
     def _cached_state(self, entity_id: str) -> str | None:
         """Return HA's cached state for entity, or None if unavailable."""
@@ -957,9 +990,9 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         except (ValueError, TypeError):
             return None
 
-    async def _stop_battery(self) -> None:
+    async def _stop_battery(self) -> bool:
         """Set battery to standby (idle) — used at idle states."""
-        await self._set_battery_power(0)
+        return await self._set_battery_power(0)
 
 
 

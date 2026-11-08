@@ -96,10 +96,15 @@ def _base_schema(current: dict) -> vol.Schema:
             _number(5, 50, 5, "%", "slider"),
         vol.Optional(CONF_MAX_SOC, default=current.get(CONF_MAX_SOC, DEFAULT_MAX_SOC)):
             _number(50, 100, 5, "%", "slider"),
+        # Capped at 2500W: the Marstek Venus E v3's own Modbus register limit
+        # (per ViperRNMC's marstek_modbus driver). A higher configured value
+        # here gets silently rejected by the device, which previously could
+        # leave the UI showing "charging"/"discharging" with nothing actually
+        # happening — see the Modbus write success check in coordinator.py.
         vol.Optional(CONF_CHARGE_POWER, default=current.get(CONF_CHARGE_POWER, DEFAULT_CHARGE_POWER)):
-            _number(100, 5000, 100, "W"),
+            _number(100, 2500, 100, "W"),
         vol.Optional(CONF_DISCHARGE_POWER, default=current.get(CONF_DISCHARGE_POWER, DEFAULT_DISCHARGE_POWER)):
-            _number(100, 5000, 100, "W"),
+            _number(100, 2500, 100, "W"),
     })
 
 
