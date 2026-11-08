@@ -52,6 +52,7 @@ from .const import (
     DEFAULT_DISCHARGE_POWER,
     DEFAULT_PRE_CHARGE_MINUTES,
     DEFAULT_PRE_ACTION_FLIP_COOLDOWN,
+    DEFAULT_PRE_ACTION_PRICE_TOLERANCE,
     DEFAULT_MIN_ACTION_SECONDS,
     DEFAULT_STICKY_SAFETY_MARGIN,
     DEFAULT_SOC_TOP_UP_DEADBAND,
@@ -435,7 +436,36 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                                 f"last_active={opposite} elapsed={elapsed:.0f}s",
                             )
 
-                    if not cooldown_active:
+                    # Price check: pre-action must not cost meaningfully more than
+                    # simply waiting for the planned slot. Without this, the gate
+                    # above only looked at timing, so a charge could start at an
+                    # expensive current price minutes before a much cheaper slot
+                    # (and symmetrically, a discharge could start at a low price
+                    # minutes before a much more expensive slot). If the current
+                    # price can't be read, fail safe and skip pre-action.
+                    price_ok = False
+                    if current_price_eur is None:
+                        _diag_write(
+                            self.config_entry.entry_id,
+                            f"PREACTION_SKIP target={next_event_action} reason=geen actuele prijs",
+                        )
+                    elif next_event_action == "charge":
+                        price_ok = current_price_eur <= next_event.price_eur + DEFAULT_PRE_ACTION_PRICE_TOLERANCE
+                    else:
+                        price_ok = current_price_eur >= next_event.price_eur - DEFAULT_PRE_ACTION_PRICE_TOLERANCE
+                    if current_price_eur is not None and not price_ok:
+                        _LOGGER.info(
+                            "Pre-action %s OVERGESLAGEN — actuele prijs €%.3f wijkt te veel af "
+                            "van doelprijs €%.3f",
+                            next_event_action, current_price_eur, next_event.price_eur,
+                        )
+                        _diag_write(
+                            self.config_entry.entry_id,
+                            f"PREACTION_SKIP target={next_event_action} "
+                            f"current_price={current_price_eur:.3f} target_price={next_event.price_eur:.3f}",
+                        )
+
+                    if not cooldown_active and price_ok:
                         minutes_left = seconds_to_event / 60
                         decision.action = next_event_action
                         label = "Voorlaad" if next_event_action == "charge" else "Vooronladen"

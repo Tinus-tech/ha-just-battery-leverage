@@ -80,7 +80,13 @@ DEFAULT_MIN_SOC = 10
 DEFAULT_MAX_SOC = 95
 DEFAULT_CHARGE_POWER = 2000
 DEFAULT_DISCHARGE_POWER = 2000
-DEFAULT_PRE_CHARGE_MINUTES = 60  # start charging this many minutes before next planned charge slot
+DEFAULT_PRE_CHARGE_MINUTES = 15  # start charging this many minutes before next planned charge slot
+                                  # (was 60; with ramp-up removed there's no more gradual power
+                                  # build-up to compensate for — this is just margin for tick
+                                  # granularity. Combined with the price check below.)
+DEFAULT_PRE_ACTION_PRICE_TOLERANCE = 0.03  # EUR/kWh: pre-action only fires if the current price
+                                            # isn't worse than the target slot's price by more
+                                            # than this much
 DEFAULT_PRE_ACTION_FLIP_COOLDOWN = 300  # 5 min: skip pre-action if we did the opposite direction this recently
 DEFAULT_MIN_ACTION_SECONDS = 900  # 15 min: once charge/discharge started, commit for at least this long
 DEFAULT_STICKY_SAFETY_MARGIN = 5  # seconds subtracted from the sticky check so scheduler jitter
