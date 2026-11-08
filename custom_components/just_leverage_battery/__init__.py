@@ -22,13 +22,22 @@ DASHBOARD_URL_PATH = "just-leverage-battery"
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Just Leverage Battery from a config entry."""
     coordinator = MarstekBatteryTraderCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
-
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-
     entry.async_on_unload(coordinator.async_cleanup)
 
+    # Set up platforms BEFORE the coordinator's first refresh. The strategy
+    # select entity restores its last-used state (via RestoreEntity) into
+    # coordinator.strategy as soon as it's added to hass, which happens here.
+    # Doing this the other way around — first-refresh before platform setup —
+    # meant the very first update after a HA restart ran with whatever
+    # strategy was configured during the original setup wizard
+    # (config_entry.data[CONF_STRATEGY], never updated afterwards), not the
+    # strategy the user actually last had selected. That stale strategy could
+    # issue a charge/discharge command for one tick before the restored,
+    # correct strategy (e.g. "Uit") took over on the next cycle.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    await coordinator.async_config_entry_first_refresh()
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
