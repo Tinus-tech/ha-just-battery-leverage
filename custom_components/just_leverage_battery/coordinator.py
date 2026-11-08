@@ -22,7 +22,6 @@ from .const import (
     CONF_MAX_SOC,
     CONF_CHARGE_POWER,
     CONF_DISCHARGE_POWER,
-    CONF_RAMP_SECONDS,
     CONF_PRE_CHARGE_MINUTES,
     CONF_STRATEGY,
     CONF_MIN_PRICE_DELTA,
@@ -51,10 +50,11 @@ from .const import (
     DEFAULT_MAX_SOC,
     DEFAULT_CHARGE_POWER,
     DEFAULT_DISCHARGE_POWER,
-    DEFAULT_RAMP_SECONDS,
     DEFAULT_PRE_CHARGE_MINUTES,
     DEFAULT_PRE_ACTION_FLIP_COOLDOWN,
     DEFAULT_MIN_ACTION_SECONDS,
+    DEFAULT_STICKY_SAFETY_MARGIN,
+    DEFAULT_SOC_TOP_UP_DEADBAND,
     DEFAULT_PRICE_FORECAST_ATTR,
     DEFAULT_STRATEGY,
     DEFAULT_MIN_PRICE_DELTA,
@@ -148,15 +148,24 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         self._last_decision: TradeDecision | None = None
         self._timed_active_period: str = "geen"
 
-        # Charge/discharge ramp state
-        self._ramp_direction: str = "standby"  # "standby" | "charge" | "discharge"
-        self._ramp_started_at: float | None = None
+        # Last commanded direction (standby|charge|discharge) — used to detect
+        # transitions so _last_active_direction/_last_active_at update correctly.
+        self._current_direction: str = "standby"
 
         # Last ACTIVE direction (charge|discharge) — survives standby ticks so the
         # pre-action cooldown can detect "we recently did opposite". Updated only
         # on transitions to an active direction; persists across idle gaps.
         self._last_active_direction: str | None = None
         self._last_active_at: float | None = None
+
+        # SOC top-up hysteresis (Schmitt trigger): once SOC reaches max_soc, block
+        # further "charge" decisions until SOC drops meaningfully below max_soc
+        # (DEFAULT_SOC_TOP_UP_DEADBAND). Prevents DP from re-planning a top-up charge
+        # for every tiny SOC dip right at the ceiling — same mechanism as a
+        # thermostat deadband, requires no user configuration.
+        self._topped_up: bool = False
+        # Mirror at the bottom for symmetry (blocks "discharge" right after hitting min_soc)
+        self._bottomed_out: bool = False
 
         # Profit tracking (resets daily at midnight)
         self._today_charge_cost: float = 0.0
@@ -250,9 +259,8 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         if strategy == STRATEGY_OFF:
             # Hands-off mode: do NOT write to Modbus. User can manually control
             # the Marstek (via the marstek_modbus selects) without interference.
-            # Reset ramp state so a future strategy switch starts fresh.
-            self._ramp_direction = "standby"
-            self._ramp_started_at = None
+            # Reset direction state so a future strategy switch starts fresh.
+            self._current_direction = "standby"
             self._last_action = "off"
             self._last_reason = "Strategie staat op Uit — geen Modbus writes (handmatige bediening mogelijk)"
             return self._state_dict()
@@ -361,12 +369,11 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             self._today_date = today
 
         # Pre-action: if a charge OR discharge slot starts within pre_charge_minutes,
-        # start that action now. Lets the battery ramp up gradually so it's at full
-        # power when the cheap (or expensive) window actually begins.
+        # start that action now rather than waiting for the exact slot boundary.
         #
         # Stability checks to prevent rapid flipping when DP plan wavers near boundaries:
         # (B) FLIP cooldown — if we recently commanded the OPPOSITE direction, skip
-        # (D) Don't pre-action against an active opposite ramp
+        # (D) Don't pre-action against a direction we only just switched to
         pre_minutes = int(self._get_conf(CONF_PRE_CHARGE_MINUTES, DEFAULT_PRE_CHARGE_MINUTES))
         if pre_minutes > 0 and decision.action == "idle" and decision.plan:
             now_utc = datetime.now(timezone.utc)
@@ -385,7 +392,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 seconds_to_event = (next_event.dt - now_utc).total_seconds()
                 if 0 < seconds_to_event <= pre_minutes * 60:
                     # Cooldown: skip pre-action if we recently did the OPPOSITE direction.
-                    # Uses _last_active_* which survives standby ticks (unlike _ramp_*).
+                    # Uses _last_active_* which survives standby ticks.
                     opposite = "discharge" if next_event_action == "charge" else "charge"
                     cooldown_active = False
                     if (
@@ -415,6 +422,44 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                             f"(€{next_event.price_eur:.3f}/kWh)"
                         )
 
+        # SOC top-up/bottom-out hysteresis (thermostat-style deadband). Prevents DP
+        # from re-triggering "charge" for every tiny SOC dip right at max_soc (or
+        # "discharge" for every tiny uptick right at min_soc) — a self-inflicted
+        # oscillation that a fixed max_soc/min_soc threshold alone can't avoid,
+        # since DP re-optimises from the actual current SOC on every single tick.
+        if current_soc >= max_soc:
+            self._topped_up = True
+        elif current_soc <= max_soc - DEFAULT_SOC_TOP_UP_DEADBAND:
+            self._topped_up = False
+
+        if current_soc <= min_soc:
+            self._bottomed_out = True
+        elif current_soc >= min_soc + DEFAULT_SOC_TOP_UP_DEADBAND:
+            self._bottomed_out = False
+
+        if self._topped_up and decision.action == "charge":
+            _diag_write(
+                self.config_entry.entry_id,
+                f"TOPPED_UP SOC={current_soc:.1f}% >= max {max_soc:.0f}% — "
+                f"laden geblokkeerd tot < {max_soc - DEFAULT_SOC_TOP_UP_DEADBAND:.0f}%",
+            )
+            decision.action = "idle"
+            decision.reason = (
+                f"Vol — SOC {current_soc:.0f}% wacht tot onder "
+                f"{max_soc - DEFAULT_SOC_TOP_UP_DEADBAND:.0f}% voor nieuw laadmoment"
+            )
+        elif self._bottomed_out and decision.action == "discharge":
+            _diag_write(
+                self.config_entry.entry_id,
+                f"BOTTOMED_OUT SOC={current_soc:.1f}% <= min {min_soc:.0f}% — "
+                f"ontladen geblokkeerd tot > {min_soc + DEFAULT_SOC_TOP_UP_DEADBAND:.0f}%",
+            )
+            decision.action = "idle"
+            decision.reason = (
+                f"Leeg — SOC {current_soc:.0f}% wacht tot boven "
+                f"{min_soc + DEFAULT_SOC_TOP_UP_DEADBAND:.0f}% voor nieuw ontlaadmoment"
+            )
+
         # Post-decision anti-flip: two protections working together.
         #
         # (a) Minimum action duration: once we start charge/discharge, commit for
@@ -435,7 +480,11 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                     (sticky_action == "discharge" and current_soc <= min_soc)
                 )
 
-                if elapsed < DEFAULT_MIN_ACTION_SECONDS and not soc_blocks_sticky:
+                # Subtract a small safety margin so scheduler jitter right at the exact
+                # boundary can't let a flip slip through un-blocked (two coordinator
+                # instances starting their action ~1s apart can otherwise land on opposite
+                # sides of the threshold at the same tick — one gets stuck, one flips).
+                if elapsed < DEFAULT_MIN_ACTION_SECONDS - DEFAULT_STICKY_SAFETY_MARGIN and not soc_blocks_sticky:
                     # Keep doing the previous action — don't flip yet
                     _LOGGER.info(
                         "Anti-flip: houd %s vast (%.0fs / %ds minimum), DP wou %s",
@@ -526,10 +575,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             await self._stop_battery()
             self._last_action = "idle"
         elif decision.power_w < 0:
-            await self._set_battery_power(decision.power_w, ramp=False)
+            await self._set_battery_power(decision.power_w)
             self._last_action = "charging"
         else:
-            await self._set_battery_power(decision.power_w, ramp=False)
+            await self._set_battery_power(decision.power_w)
             self._last_action = "discharging"
 
         self._last_reason = decision.reason
@@ -573,10 +622,10 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             await self._stop_battery()
             self._last_action = "idle"
         elif decision.power_w < 0:
-            await self._set_battery_power(decision.power_w, ramp=False)
+            await self._set_battery_power(decision.power_w)
             self._last_action = "charging"
         else:
-            await self._set_battery_power(decision.power_w, ramp=False)
+            await self._set_battery_power(decision.power_w)
             self._last_action = "discharging"
 
         self._last_reason = decision.reason
@@ -737,12 +786,13 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         except ValueError:
             return None
 
-    def _ramp_power(self, target_power: int, ramp: bool) -> int:
-        """Apply linear ramp-up on transitions between standby/charge/discharge.
+    def _track_direction(self, target_power: int) -> None:
+        """Update direction-change bookkeeping (no ramping — commands go out at full power).
 
-        On the first tick of a new direction, output starts near 100W and
-        rises linearly to target over CONF_RAMP_SECONDS.  Subsequent ticks
-        in the same direction follow the same curve until target is reached.
+        On every transition between standby/charge/discharge, records the new
+        active direction and timestamp. This feeds the anti-flip hysteresis
+        (sticky minimum-duration and pre-action cooldown), which still needs
+        to know when a direction last changed even without power ramping.
         """
         if target_power == 0:
             new_dir = "standby"
@@ -751,40 +801,20 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         else:
             new_dir = "discharge"
 
-        if new_dir != self._ramp_direction:
-            self._ramp_direction = new_dir
-            self._ramp_started_at = time.monotonic() if new_dir != "standby" else None
-            # Track last active direction separately — survives standby gaps
+        if new_dir != self._current_direction:
+            self._current_direction = new_dir
             if new_dir in ("charge", "discharge"):
                 self._last_active_direction = new_dir
                 self._last_active_at = time.monotonic()
 
-        if not ramp or new_dir == "standby" or self._ramp_started_at is None:
-            return target_power
-
-        ramp_secs = float(self._get_conf(CONF_RAMP_SECONDS, DEFAULT_RAMP_SECONDS))
-        if ramp_secs <= 0:
-            return target_power
-
-        elapsed = time.monotonic() - self._ramp_started_at
-        if elapsed >= ramp_secs:
-            return target_power
-
-        factor = elapsed / ramp_secs
-        magnitude = abs(target_power) * factor
-        rounded = max(100, round(magnitude / 100) * 100)
-        rounded = min(rounded, abs(target_power))
-        return -rounded if target_power < 0 else rounded
-
-    async def _set_battery_power(self, power: int, ramp: bool = True) -> None:
+    async def _set_battery_power(self, power: int) -> None:
         """Set the battery to charge/discharge at the given power via ViperRNMC Modbus.
 
         Convention: power < 0 = charging, power > 0 = discharging, power == 0 = standby.
         Sends commands every tick — does not check the current Modbus state.
-        Linear ramp-up is applied on direction changes (charge ↔ discharge ↔ standby);
-        pass ramp=False to skip ramping (used by PID strategies that smooth on their own).
+        Commands go out at full requested power immediately (no ramp-up).
         """
-        power = self._ramp_power(power, ramp)
+        self._track_direction(power)
 
         # Determine target. NOTE: when going to idle (power==0) we intentionally do
         # NOT try to write force_mode="stop" — some Marstek firmware/versions reject

@@ -40,7 +40,6 @@ CONF_MIN_SOC = "min_soc"
 CONF_MAX_SOC = "max_soc"
 CONF_CHARGE_POWER = "charge_power"
 CONF_DISCHARGE_POWER = "discharge_power"
-CONF_RAMP_SECONDS = "ramp_seconds"
 CONF_PRE_CHARGE_MINUTES = "pre_charge_minutes"
 CONF_STRATEGY = "strategy"
 
@@ -81,10 +80,13 @@ DEFAULT_MIN_SOC = 10
 DEFAULT_MAX_SOC = 95
 DEFAULT_CHARGE_POWER = 2000
 DEFAULT_DISCHARGE_POWER = 2000
-DEFAULT_RAMP_SECONDS = 1800   # 30 min linear ramp from 100W to target on start
 DEFAULT_PRE_CHARGE_MINUTES = 60  # start charging this many minutes before next planned charge slot
 DEFAULT_PRE_ACTION_FLIP_COOLDOWN = 300  # 5 min: skip pre-action if we did the opposite direction this recently
 DEFAULT_MIN_ACTION_SECONDS = 900  # 15 min: once charge/discharge started, commit for at least this long
+DEFAULT_STICKY_SAFETY_MARGIN = 5  # seconds subtracted from the sticky check so scheduler jitter
+                                   # right at the boundary can't let a flip slip through un-blocked
+DEFAULT_SOC_TOP_UP_DEADBAND = 3   # %-points: once SOC hits max_soc, block further charging until
+                                   # SOC drops this many points below max_soc (thermostat-style deadband)
 
 # Defaults — arbitrage
 DEFAULT_CHEAP_HOURS = 4
