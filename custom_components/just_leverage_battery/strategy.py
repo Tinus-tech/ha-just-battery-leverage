@@ -410,14 +410,36 @@ def resolve_timed_strategy(
 def _parse_slots(forecast_raw: list) -> list[PriceSlot]:
     """Parse Zonneplan forecast items into PriceSlot objects.
 
-    Handles both legacy (string ISO datetime) and current (datetime object)
-    formats.  Also robust against new 15-minute-interval forecasts.
+    Supports two Zonneplan forecast shapes, verified against live sensor data:
+
+    - Hourly (sensor.zonneplan_current_electricity_tariff): flat
+      'datetime' (ISO string, or a datetime object in some HA versions) +
+      flat 'electricity_price' (int, 0.1-nano-EUR/kWh).
+
+    - Quarter-hourly (sensor.zonneplan_current_quarter_hourly_electricity_tariff):
+      no 'datetime'/'electricity_price' at all — instead 'start_date' (ISO
+      string, slot start) + nested 'price_tax_included': {'amount': int}.
+      Same 0.1-nano-EUR/kWh unit as the hourly sensor's 'electricity_price'
+      (confirmed: both sensors' forecast item for the current hour/quarter
+      matches their own .state value exactly after /PRICE_UNIT).
+
+    Falls back from the hourly fields to the quarter-hourly fields when the
+    former are absent, so either sensor works as CONF_PRICE_SENSOR.
     """
     slots = []
     for item in forecast_raw:
         try:
-            dt_val = item.get("datetime", "")
-            price_raw = float(item.get("electricity_price", 0))
+            dt_val = item.get("datetime")
+            if dt_val is None:
+                dt_val = item.get("start_date")
+
+            price_val = item.get("electricity_price")
+            if price_val is None:
+                price_tax_included = item.get("price_tax_included")
+                if isinstance(price_tax_included, dict):
+                    price_val = price_tax_included.get("amount")
+            price_raw = float(price_val)  # raises (and skips this item) if still None
+
             if isinstance(dt_val, datetime):
                 dt = dt_val
                 if dt.tzinfo is None:
