@@ -107,6 +107,10 @@ from .strategy import (
 
 _LOGGER = logging.getLogger(__name__)
 
+SOC_UNAVAILABLE_REASON = (
+    "SOC niet beschikbaar — batterij gestopt (kan grenzen niet verifiëren)"
+)
+
 # Persistent diagnostic log — survives HA restarts and log rotation.
 # Each instance appends; entry_id distinguishes instances.
 _DIAG_PATH = "/config/jlb_diag.log"
@@ -309,21 +313,33 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         discharge_power = int(self._get_conf(CONF_DISCHARGE_POWER, DEFAULT_DISCHARGE_POWER))
         min_price_delta = float(self._get_conf(CONF_MIN_PRICE_DELTA, DEFAULT_MIN_PRICE_DELTA))
 
+        # Safety: any failure below must park the battery at 0W before returning.
+        # Leaving the previous command in place (the old behaviour) means a stale
+        # charge/discharge command can keep running indefinitely while HA shows
+        # an error state and nobody is the wiser.
         if not price_sensor:
+            await self._stop_battery()
             self._last_action = "config_error"
-            self._last_reason = "Geen prijs-sensor geconfigureerd"
+            self._last_reason = "Geen prijs-sensor geconfigureerd — batterij gestopt"
             return
 
         price_state = self.hass.states.get(price_sensor)
         if price_state is None:
+            await self._stop_battery()
             self._last_action = "error"
-            self._last_reason = f"Prijssensor {price_sensor} niet gevonden"
+            self._last_reason = f"Prijssensor {price_sensor} niet gevonden — batterij gestopt"
             return
 
         current_soc = await self._get_soc()
         self._last_soc = current_soc
         if current_soc is None:
-            current_soc = 50.0
+            # Without a real SOC reading we cannot verify min_soc/max_soc, so we
+            # cannot safely issue a new charge/discharge command either — stop
+            # instead of silently assuming 50%.
+            await self._stop_battery()
+            self._last_action = "error"
+            self._last_reason = SOC_UNAVAILABLE_REASON
+            return
 
         forecast_raw = price_state.attributes.get(forecast_attr, [])
         decision = parse_zonneplan_forecast(
@@ -335,8 +351,9 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         self._last_plan = decision.plan if decision else None
 
         if decision is None:
+            await self._stop_battery()
             self._last_action = "error"
-            self._last_reason = "Geen geldige prijsdata beschikbaar"
+            self._last_reason = "Geen geldige prijsdata beschikbaar — batterij gestopt"
             return
 
         _LOGGER.debug(
@@ -544,12 +561,18 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         current_soc = await self._get_soc()
         self._last_soc = current_soc
         if current_soc is None:
-            current_soc = 50.0
+            # Without a real SOC reading we cannot verify min_soc/max_soc —
+            # stop instead of silently assuming 50% and issuing a new command.
+            await self._stop_battery()
+            self._last_action = "error"
+            self._last_reason = SOC_UNAVAILABLE_REASON
+            return
 
         grid_power = await self._get_grid_power()
         if grid_power is None:
+            await self._stop_battery()
             self._last_action = "error"
-            self._last_reason = "Netwerk vermogen sensor niet beschikbaar"
+            self._last_reason = "Netwerk vermogen sensor niet beschikbaar — batterij gestopt"
             return
 
         if self._pid_controller is None:
@@ -587,12 +610,18 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         current_soc = await self._get_soc()
         self._last_soc = current_soc
         if current_soc is None:
-            current_soc = 50.0
+            # Without a real SOC reading we cannot verify min_soc/max_soc —
+            # stop instead of silently assuming 50% and issuing a new command.
+            await self._stop_battery()
+            self._last_action = "error"
+            self._last_reason = SOC_UNAVAILABLE_REASON
+            return
 
         grid_power = await self._get_grid_power()
         if grid_power is None:
+            await self._stop_battery()
             self._last_action = "error"
-            self._last_reason = "Netwerk vermogen sensor niet beschikbaar"
+            self._last_reason = "Netwerk vermogen sensor niet beschikbaar — batterij gestopt"
             return
 
         if self._pid_controller is None:
@@ -634,8 +663,9 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         current_soc = await self._get_soc()
         self._last_soc = current_soc
         if current_soc is None:
+            await self._stop_battery()
             self._last_action = "error"
-            self._last_reason = "SOC niet beschikbaar"
+            self._last_reason = SOC_UNAVAILABLE_REASON
             return
 
         target_soc = float(self._get_conf(CONF_TARGET_SOC, DEFAULT_TARGET_SOC))
@@ -657,8 +687,9 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         current_soc = await self._get_soc()
         self._last_soc = current_soc
         if current_soc is None:
+            await self._stop_battery()
             self._last_action = "error"
-            self._last_reason = "SOC niet beschikbaar"
+            self._last_reason = SOC_UNAVAILABLE_REASON
             return
 
         target_soc = float(self._get_conf(CONF_TARGET_SOC, DEFAULT_TARGET_SOC))
