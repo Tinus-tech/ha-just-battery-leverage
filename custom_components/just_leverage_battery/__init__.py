@@ -48,7 +48,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_setup_dashboard(hass: HomeAssistant) -> None:
-    """Create the Lovelace dashboard on first setup."""
+    """Create the Lovelace dashboard on first setup only.
+
+    Only writes the bundled dashboard content the very first time (when no
+    stored dashboard exists yet). Previously this ran unconditionally on
+    every async_setup_entry — i.e. every HA restart, integration reload, or
+    options change — silently wiping out any customisation the user made to
+    this dashboard through the Lovelace UI.
+    """
+    content_store = Store(hass, 1, f"lovelace.{DASHBOARD_URL_PATH}")
+    existing = await content_store.async_load()
+    if existing is not None:
+        _LOGGER.debug("Dashboard bestaat al — niet overschreven")
+        return
+
     yaml_path = os.path.join(os.path.dirname(__file__), "dashboard.yaml")
     if not os.path.exists(yaml_path):
         _LOGGER.warning("dashboard.yaml niet gevonden, dashboard wordt niet aangemaakt")
@@ -64,9 +77,8 @@ async def _async_setup_dashboard(hass: HomeAssistant) -> None:
         _LOGGER.warning("Kon dashboard.yaml niet laden: %s", exc)
         return
 
-    # Save/update dashboard content
-    content_store = Store(hass, 1, f"lovelace.{DASHBOARD_URL_PATH}")
     await content_store.async_save(config)
+    _LOGGER.info("Just Leverage Battery dashboard-content aangemaakt (eerste keer)")
 
     # Register in the Lovelace dashboard list
     dashboards_store = Store(hass, 1, "lovelace_dashboards")
