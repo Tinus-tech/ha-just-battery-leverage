@@ -366,12 +366,18 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             f"TICK SOC={current_soc:.1f}% action={decision.action} reason={decision.reason!r}",
         )
 
-        # Get current electricity price for charge cost tracking
+        # Get current electricity price for charge cost tracking.
+        # NOTE: price_state.state is already in EUR/kWh (the sensor's native
+        # unit of measurement) — unlike the raw nano-euro encoding used inside
+        # the forecast[] attribute items, which is what PRICE_UNIT (1e7) is
+        # for. Dividing .state by PRICE_UNIT here was a bug: it silently
+        # shrank every profit figure to ~0, since a real price like 0.25
+        # became 0.000000025. Confirmed against dashboard.yaml, which plots
+        # .state directly (no division) on the same axis as forecast values
+        # that ARE divided by PRICE_UNIT.
         current_price_eur = None
         try:
-            raw = float(price_state.state)
-            from .strategy import PRICE_UNIT
-            current_price_eur = raw / PRICE_UNIT
+            current_price_eur = float(price_state.state)
         except (ValueError, TypeError):
             pass
 
