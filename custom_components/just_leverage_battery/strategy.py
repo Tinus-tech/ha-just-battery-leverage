@@ -109,6 +109,7 @@ class PIDState:
     integral: float = 0.0
     last_error: float = 0.0
     last_time: float = field(default_factory=time.monotonic)
+    last_output: int = 0  # for the rate limiter — previous tick's commanded power
 
 
 @dataclass
@@ -147,6 +148,7 @@ class PIDController:
         deadband: float,
         output_min: int,   # most negative value (charge limit, e.g. -2000)
         output_max: int,   # most positive value (discharge limit, e.g. +2000)
+        max_step_w: int | None = None,  # max |change| in output per tick (rate limiter)
     ) -> None:
         self.kp = kp
         self.ki = ki
@@ -154,8 +156,33 @@ class PIDController:
         self.deadband = deadband
         self.output_min = output_min
         self.output_max = output_max
-        # Anti-windup limit: cap integral contribution at ±output_max
-        self._anti_windup = abs(output_max) if output_max != 0 else 5000
+        self.max_step_w = max_step_w
+        # Anti-windup: clamp the integral so its OUTPUT contribution (ki * integral)
+        # stays within output_max, not the raw watt-second accumulator itself. The
+        # original code clamped the accumulator directly to ±output_max, which —
+        # since the accumulator is in watt-SECONDS (error * dt) — saturated almost
+        # instantly against a persistent few-hundred-watt error, capping the
+        # integral's real contribution to a few tens of watts regardless of ki.
+        # That left a permanent steady-state offset no amount of waiting closed.
+        output_cap = abs(output_max) if output_max != 0 else 5000
+        self._anti_windup = output_cap / ki if ki > 0 else float("inf")
+
+    def _rate_limit(self, target: float, state: PIDState) -> int:
+        """Clamp the change from the previous tick's output to ±max_step_w.
+
+        Applied uniformly — including the deadband "snap to 0" case, which
+        previously bypassed any limiting and could jump straight from e.g.
+        -900W to 0W in one tick. That instant drop-out removed the battery's
+        absorption of the PV surplus all at once, which immediately recreated
+        a large error the next tick — a self-inflicted oscillation independent
+        of the gain values.
+        """
+        stepped = round(target / self.POWER_STEP) * self.POWER_STEP
+        clamped = max(self.output_min, min(self.output_max, stepped))
+        if self.max_step_w is None:
+            return int(clamped)
+        limited = max(state.last_output - self.max_step_w, min(state.last_output + self.max_step_w, clamped))
+        return int(round(limited / self.POWER_STEP) * self.POWER_STEP)
 
     def compute(
         self,
@@ -176,12 +203,14 @@ class PIDController:
         # Deadband: no action if close enough to setpoint
         if abs(error) < self.deadband:
             new_integral = state.integral * 0.95  # slow integral decay in deadband
+            output = self._rate_limit(0, state)
             new_state = PIDState(
                 integral=new_integral,
                 last_error=error,
                 last_time=now,
+                last_output=output,
             )
-            return 0, new_state
+            return output, new_state
 
         # PID terms
         p_term = self.kp * error
@@ -191,17 +220,15 @@ class PIDController:
         d_term = self.kd * (error - state.last_error) / dt
 
         raw_output = p_term + i_term + d_term
-
-        # Round to nearest step, then clamp to limits
-        stepped = round(raw_output / self.POWER_STEP) * self.POWER_STEP
-        clamped = max(self.output_min, min(self.output_max, stepped))
+        output = self._rate_limit(raw_output, state)
 
         new_state = PIDState(
             integral=new_integral,
             last_error=error,
             last_time=now,
+            last_output=output,
         )
-        return int(clamped), new_state
+        return output, new_state
 
 
 # ---------------------------------------------------------------------------

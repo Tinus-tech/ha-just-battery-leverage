@@ -103,10 +103,17 @@ DEFAULT_STRATEGY = STRATEGY_OFF
 
 # Defaults — PID
 DEFAULT_TARGET_GRID_POWER = 0
-DEFAULT_PID_KP = 1.0
-DEFAULT_PID_KI = 0.05
+# PID gains for self-consumption / charge_pv. Lowered from kp=1.0/ki=0.05 after
+# simulation showed the original values diverge (unbounded oscillation toward
+# the output clamp) even for a SINGLE battery against a constant PV surplus —
+# not just when multiple instances share one grid meter. See also
+# DEFAULT_PID_MAX_STEP_W, which bounds any residual oscillation regardless of
+# gain tuning.
+DEFAULT_PID_KP = 0.3
+DEFAULT_PID_KI = 0.03
 DEFAULT_PID_KD = 0.01
 DEFAULT_PID_DEADBAND = 15
+DEFAULT_PID_MAX_STEP_W = 300  # max change in commanded power per PID tick (rate limiter)
 DEFAULT_PEAK_SHAVE_LIMIT = 2500
 
 # Defaults — charge/sell

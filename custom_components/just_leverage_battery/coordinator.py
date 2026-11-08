@@ -64,6 +64,7 @@ from .const import (
     DEFAULT_PID_KI,
     DEFAULT_PID_KD,
     DEFAULT_PID_DEADBAND,
+    DEFAULT_PID_MAX_STEP_W,
     DEFAULT_PEAK_SHAVE_LIMIT,
     DEFAULT_TARGET_SOC,
     DEFAULT_TIMED_PERIOD_A_START,
@@ -238,6 +239,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             deadband=float(self._get_conf(CONF_PID_DEADBAND, DEFAULT_PID_DEADBAND)),
             output_min=-charge_power,
             output_max=discharge_power,
+            max_step_w=DEFAULT_PID_MAX_STEP_W,
         )
 
     async def _async_pid_tick(self, _now) -> None:
