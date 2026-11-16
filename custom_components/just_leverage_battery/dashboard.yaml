@@ -285,8 +285,7 @@ views:
               {% set cheapest_hour = cheapest_hour_next_fifteen_hours | first %}
 
               {% set cheapest_hour_local_time =
-              as_timestamp(strptime(cheapest_hour.datetime,
-              '%Y-%m-%dT%H:%M:%S.%fZ')) + timezone_offset * 3600 %}
+              as_timestamp(cheapest_hour.datetime) + timezone_offset * 3600 %}
 
               De goedkoopste tijd is {{ 'vandaag' if
               as_timestamp(utcnow())|timestamp_custom('%Y-%m-%d') ==
@@ -315,13 +314,6 @@ views:
                 '<', (utcnow() + timedelta(hours = 15)).isoformat()) | list |
                 sort(attribute='datetime') %}
 
-                {%- set forecast_local_time = as_timestamp(strptime(forecast.datetime, '%Y-%m-%dT%H:%M:%S.%fZ')) + timezone_offset * 3600 %}
+                {%- set forecast_local_time = as_timestamp(forecast.datetime) + timezone_offset * 3600 %}
                 • {{ (forecast_local_time)|timestamp_custom('%H:%M') }}    €{{ (forecast.electricity_price / 10000000) | round(2) }} (€{{ (forecast.electricity_price_excl_tax / 10000000) | round(2) }} excl.) {% if forecast == cheapest_forecast %}⭐{% endif %}{% if forecast == expensive_forecast %}🔴{% endif %}
                 {%- endfor %}
-    header:
-      card:
-        type: markdown
-        text_only: true
-        content: |-
-          # Hallo {{ user }}
-          Here is a dashboard to manage your battery ✨
