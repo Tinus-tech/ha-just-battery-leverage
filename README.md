@@ -5,7 +5,9 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![GitHub Release](https://img.shields.io/github/v/release/Tinus-tech/ha-just-battery-leverage)](https://github.com/Tinus-tech/ha-just-battery-leverage/releases)
 
-Turn your **Marstek Venus V3** into a battery that trades electricity for you. Just Leverage Battery watches your dynamic price forecast (Zonneplan, Nordpool, or any sensor with hourly/quarter-hourly data), works out the most profitable charge and discharge plan with a proper optimization algorithm, and drives the battery over **Modbus TCP or the Marstek Local API** (your choice) — no cloud round-trip, no app, no manual button-pressing.
+Just Leverage Battery drives a supported Marstek home battery from Home Assistant. It plans charging and discharging based on dynamic electricity prices, and also supports self-consumption, solar charging, and time schedules. You set power and SOC limits per battery. The dashboard shows the active strategy, the reason for the current decision, and the measured battery status.
+
+It drives the battery locally over **Modbus TCP or the Marstek Local API** (your choice, depending which companion integration you have installed — see [Requirements](#requirements)) — no cloud round-trip involved.
 
 <img src="images/dashboard.png" alt="Just Leverage Battery dashboard" width="100%">
 
@@ -15,10 +17,10 @@ Turn your **Marstek Venus V3** into a battery that trades electricity for you. J
 
 ## Why this integration
 
-- **It actually optimizes, not just "cheapest N hours"** — a dynamic programming solver looks at your whole price forecast and your battery's SOC limits together, so it finds the plan that maximizes profit over the full horizon, including partial charge/discharge slots near the SOC ceiling or floor.
-- **It protects your battery and your money.** Charge/discharge only starts if the price actually justifies it, every Modbus write is verified before the dashboard says "charging", and the battery is stopped — not left running on a stale command — the moment a sensor drops out.
+- **Looks at the whole picture, not just "cheapest N hours"** — a dynamic programming solver considers your full price forecast together with your battery's SOC limits, aiming for the most profitable plan over that horizon *according to its own model* (see [Financial figures](#financial-figures) for what that model does and doesn't account for), including partial charge/discharge slots near the SOC ceiling or floor.
+- **Includes basic safeguards.** Charge/discharge only starts if the modelled price difference clears a configurable minimum, a command is only reported as "charging" after it's confirmed to have gone through, and the battery is stopped — not left running on a stale command — the moment a required sensor becomes unavailable. These are software safeguards within this integration, not a substitute for the battery's own hardware protection or your control backend's limitations — see that backend's own documentation for what it guarantees.
 - **It stays put.** Anti-flip logic stops the battery from rapidly reversing direction near a price or SOC boundary, and a thermostat-style deadband keeps it from chasing every 1% SOC wobble at the top or bottom of your configured range.
-- **It tells you what it earned.** Daily and lifetime profit tracking, right there as sensors, with revenue/cost/kWh breakdown.
+- **Tracks an estimated trading result.** Daily and lifetime figures, right there as sensors — estimated from the model's own plan, not from independently metered import/export. Again, see [Financial figures](#financial-figures) before reading these as guaranteed profit.
 - **Runs two batteries without a fight.** Each Marstek device gets its own config entry; the self-consumption PID controller is tuned to stay stable even when multiple batteries respond to the same grid meter.
 
 ---
@@ -34,7 +36,7 @@ Turn your **Marstek Venus V3** into a battery that trades electricity for you. J
 | **Discharge to minimum** | Discharge/sell until minimum SOC is reached |
 | **Schedule (A/B/C)** | Time-based scheduler — run different strategies per time block |
 | **UPS standby** | Battery stays charged as backup power — no trading |
-| **Off** | Fully hands-off — no Modbus writes at all, so you can control the Marstek directly or through its own app without the integration interfering |
+| **Off** | Fully hands-off — no commands sent at all, so you can control the Marstek directly or through its own app without the integration interfering |
 
 **Safety, always on:**
 - Battery is actively stopped — not left on its last command — if the price sensor, forecast, or SOC reading becomes unavailable
@@ -60,6 +62,9 @@ Just Leverage Battery never talks to the Marstek directly — it sends commands 
 | Connection | Ethernet, Modbus TCP (port 502) | Local network, UDP (Marstek's own "Open API") |
 | Extra hardware | Needs an RS485-to-Ethernet gateway wired to the battery | None — works over the battery's existing Wi-Fi/LAN connection |
 | Setup effort | More wiring, very mature/battle-tested | Simpler, no extra cabling |
+| Status in this integration | Established — the original, most-tested control path | **Newer, less battle-tested** here — the integration it depends on documents the battery's local UDP API as sensitive to request bursts; see the command-frequency note below |
+
+Known limitations of each backend (firmware quirks, request limits, reliability) live in that backend's own documentation — issues reported there aren't necessarily something this integration can work around, and this integration's own safeguards (see [Why this integration](#why-this-integration)) don't override them.
 
 Select which one you're using under **Control method** in this integration's setup form (see [Configuration](#configuration)) — pick the wrong one and the integration will log that it can't find the battery's SOC/command entities.
 
@@ -71,12 +76,16 @@ Select which one you're using under **Control method** in this integration's set
 
 > **Note on command frequency:** the Marstek's local UDP API is known to become unstable (dropped CT002 link, unresponsive commands) under frequent or bursty requests. Just Leverage Battery only sends a `set_passive_mode` command when the target power actually changes by a meaningful amount, with an occasional keep-alive refresh so the command doesn't auto-expire in between — not on every tick. Modbus doesn't need this: it already skips re-writing a value that's already correct.
 
-### 2. Zonneplan ONE (required for arbitrage)
-**[fsaris/home-assistant-zonneplan-one](https://github.com/fsaris/home-assistant-zonneplan-one)**
+### 2. A dynamic price source (required for the Arbitrage strategy)
 
-Provides dynamic electricity prices and forecast data used by the arbitrage planning algorithm. Both the hourly sensor (`sensor.zonneplan_current_electricity_tariff`) and the quarter-hourly sensor (`sensor.zonneplan_current_quarter_hourly_electricity_tariff`) are supported — slot duration is detected automatically from the forecast data.
+Arbitrage needs a sensor exposing a price forecast. The worked example below is **[fsaris/home-assistant-zonneplan-one](https://github.com/fsaris/home-assistant-zonneplan-one)**, which this integration is developed and tested against; other strategies (self-consumption, solar charging, schedule, UPS, off) don't need a price source at all.
 
-> **Note:** Any price sensor with a `forecast` attribute containing price data can be used — Zonneplan is not strictly required. Nordpool and other dynamic price providers work too, as long as each forecast item carries a timestamp and a price.
+Just Leverage Battery parses whichever of Zonneplan's two sensors you point it at — slot duration is detected automatically:
+
+- Hourly: `sensor.zonneplan_current_electricity_tariff`, forecast items shaped like `{"datetime": "...", "electricity_price": ..., "electricity_price_excl_tax": ...}`
+- Quarter-hourly: `sensor.zonneplan_current_quarter_hourly_electricity_tariff`, forecast items shaped like `{"start_date": "...", "price_tax_included": {"amount": ...}}`
+
+> **Other providers (e.g. Nordpool):** supported in principle, but only these two exact forecast shapes are parsed — a sensor using different field names won't work without a code change. If you want to use a different provider, open an issue with that sensor's actual forecast attribute structure.
 
 ---
 
@@ -124,6 +133,19 @@ Depending on the strategy, additional settings are shown:
 
 All settings can be changed later via **Settings > Devices & Services > Just Leverage Battery > Configure**. Have two batteries? Add the integration twice, once per Marstek device — each runs its own planning and its own profit counter.
 
+### Checklist after first setup
+
+Before trusting a new controller to actually run a battery, work through this:
+
+1. **Telemetry works:** the Battery SOC sensor shows a real percentage, not `unknown`/`unavailable`. If it doesn't, the configured Marstek Device ID or control method likely doesn't match what's actually installed.
+2. **The right physical battery is linked:** confirm the Device ID you entered really points at the battery you mean to control, especially with more than one battery installed.
+3. **Price source is valid** (arbitrage only): the configured price sensor and forecast attribute resolve to real values with sane units — check the Arbitrage plan sensor's attributes.
+4. **SOC/power limits are what you intended:** double-check min/max SOC and charge/discharge power against the battery's actual capabilities.
+5. **Configured strategy matches the active strategy:** after changing the strategy via Configure, check the strategy selector entity actually shows what you just set, not the old value.
+6. **Understand why it's idle/charging/discharging:** read the Decision reason sensor — "waiting" with a reason is normal, not a fault. A measured 0W alongside an idle/waiting decision reason is expected behaviour, not a problem to debug.
+
+On a Home Assistant restart or integration reload, the configured strategy (as last saved via Configure, or last picked in the strategy selector) resumes automatically — it does not default back to Off. If you want the battery left alone across a restart, explicitly set the strategy to **Off** beforehand; manual control on another integration/app always takes priority whenever this integration's strategy is Off.
+
 ---
 
 ## Entities
@@ -142,10 +164,24 @@ After installation, these entities are created:
 | Next discharge window | Sensor | Timestamp of the next planned discharge block |
 | Arbitrage plan | Sensor | Summary + full plan (time, action, price, SOC) and expected profit as attributes |
 | Today's profit | Sensor | Revenue minus cost so far today, with kWh breakdown as attributes |
-| Total profit | Sensor | Lifetime profit since installation |
+| Total profit | Sensor | Estimated profit since the last reload (see [Financial figures](#financial-figures) — not yet persisted across reloads) |
 | Grid power (measured) | Sensor | Current grid power for PID strategies |
 | PID battery command | Sensor | Current PID output power |
 | Schedule active block | Sensor | Currently active time period (A/B/C/none) |
+
+---
+
+## Financial figures
+
+The expected-profit figure on the arbitrage plan sensor, and the **Today's profit** / **Total profit** sensors, are a **model estimate**, not a measurement from an energy meter. Specifically:
+
+- Cost/revenue per tick = *configured* charge/discharge power × tick duration × the live price sensor reading at that moment — not the battery's actually metered AC power or a separate import/export meter.
+- **Round-trip efficiency losses are not subtracted from the running total.** The arbitrage planner itself accounts for efficiency (default 90% round-trip) when deciding whether a cycle is worth doing at all, but the profit *counter* does not discount for it — so the real, physically realized profit is somewhat lower than what these sensors show.
+- Whatever the price sensor's field returns is used as-is — whether that includes tax, network fees, or a separate (lower) feed-in tariff for exported energy depends entirely on your price sensor/forecast attribute, not on this integration.
+- Battery wear/degradation is not costed in.
+- **Lifetime total profit is kept in memory only** and currently resets to 0 whenever the integration reloads (a HA restart, a HACS update, or saving any setting via Configure) — it is not yet persisted across reloads. Treat it as "since the last reload," not "since installation," until this is fixed (tracked as a separate issue).
+
+Read these sensors as an indication of whether the chosen strategy is directionally working, not as an exact, audited financial result.
 
 ---
 
@@ -158,7 +194,7 @@ Every tick, the integration builds the full price forecast and runs a **dynamic 
 3. Drop any charge/discharge cycle whose price delta doesn't clear the configured minimum — a profitable-looking plan with a cycle that barely breaks even gets trimmed
 4. Trace the optimal path forward from the battery's current SOC to get the plan for right now
 5. If a profitable slot starts soon (configurable window) and the current price is close enough to that slot's price, start the action a little early instead of waiting for the exact boundary
-6. Execute the current slot's action via Modbus — and hold it for a minimum duration once started, so the plan doesn't flip back and forth across a close call
+6. Execute the current slot's action via whichever control method is configured — and hold it for a minimum duration once started, so the plan doesn't flip back and forth across a close call
 
 The full plan — per slot: action, price, simulated SOC — plus the expected profit for the whole horizon is available as an attribute on the arbitrage plan sensor.
 
@@ -185,7 +221,7 @@ Only one control method is active at a time — chosen via the **Control method*
 
 ## Manual control
 
-Set the strategy to **Off** and the integration stops sending any Modbus commands at all. You can then drive the Marstek directly through ViperRNMC's own entities, or through the Marstek app, without the integration fighting you for control. Switch the strategy back and automatic control resumes on the next tick.
+Set the strategy to **Off** and the integration stops sending any commands at all, regardless of control method. You can then drive the Marstek directly through your control backend's own entities/services, or through the Marstek app, without the integration fighting you for control. Switch the strategy back and automatic control resumes on the next tick.
 
 ---
 

@@ -47,8 +47,21 @@ class MarstekStrategySelect(CoordinatorEntity, SelectEntity, RestoreEntity):
         return self.coordinator.strategy
 
     async def async_added_to_hass(self) -> None:
-        """Restore last strategy after HA restart."""
+        """Restore last strategy after HA restart.
+
+        Skipped if the options flow just explicitly set a new strategy (see
+        config_flow.py's _mark_strategy_override): without this check, saving
+        a strategy change via Configure triggers a reload, and this restore
+        would immediately overwrite the coordinator's freshly-configured
+        strategy with whatever this entity's state was *before* that reload
+        — silently reverting the change the user just made.
+        """
         await super().async_added_to_hass()
+        pending_key = f"{self._config_entry.entry_id}_pending_strategy"
+        pending = self.hass.data.get(DOMAIN, {}).pop(pending_key, None)
+        if pending is not None:
+            self.coordinator.strategy = pending
+            return
         last_state = await self.async_get_last_state()
         if last_state and last_state.state in STRATEGIES:
             self.coordinator.strategy = last_state.state

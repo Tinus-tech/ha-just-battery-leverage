@@ -1,9 +1,9 @@
 {
   "domain": "just_leverage_battery",
   "name": "Just Leverage Battery",
-  "version": "1.5.1",
-  "documentation": "https://github.com/Tinus-tech/ha-just-leverage-battery",
-  "issue_tracker": "https://github.com/Tinus-tech/ha-just-leverage-battery/issues",
+  "version": "1.5.2",
+  "documentation": "https://github.com/Tinus-tech/ha-just-battery-leverage",
+  "issue_tracker": "https://github.com/Tinus-tech/ha-just-battery-leverage/issues",
   "dependencies": [],
   "codeowners": ["@Tinus-tech"],
   "requirements": [],

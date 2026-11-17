@@ -258,6 +258,19 @@ class MarstekBatteryTraderOptionsFlow(config_entries.OptionsFlow):
     def __init__(self):
         self._data: dict = {}
 
+    def _mark_strategy_override(self) -> None:
+        """Signal the strategy select entity that this flow just set a new
+        strategy, so it takes that value over whatever it would otherwise
+        restore from before the reload this save triggers (see select.py's
+        async_added_to_hass). Without this, saving a strategy change here
+        gets silently reverted back to the pre-change value once the reload
+        completes.
+        """
+        strategy = self._data.get(CONF_STRATEGY)
+        if strategy is not None:
+            key = f"{self.config_entry.entry_id}_pending_strategy"
+            self.hass.data.setdefault(DOMAIN, {})[key] = strategy
+
     async def async_step_init(self, user_input=None):
         current = {**self.config_entry.data, **self.config_entry.options}
 
@@ -269,6 +282,7 @@ class MarstekBatteryTraderOptionsFlow(config_entries.OptionsFlow):
             strategy = user_input.get(CONF_STRATEGY, current.get(CONF_STRATEGY, DEFAULT_STRATEGY))
             if _strategy_schema(strategy, current) is not None:
                 return await self.async_step_strategy_config()
+            self._mark_strategy_override()
             return self.async_create_entry(title="", data=self._data)
 
         return self.async_show_form(
@@ -282,6 +296,7 @@ class MarstekBatteryTraderOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             self._data.update(user_input)
+            self._mark_strategy_override()
             return self.async_create_entry(title="", data=self._data)
 
         return self.async_show_form(

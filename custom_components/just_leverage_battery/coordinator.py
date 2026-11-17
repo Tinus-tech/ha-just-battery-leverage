@@ -160,7 +160,16 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, config_entry) -> None:
         self.config_entry = config_entry
-        self._strategy: str = config_entry.data.get(CONF_STRATEGY, DEFAULT_STRATEGY)
+        # Seed from the merged config (options override data) — not from
+        # config_entry.data alone, which only ever holds the value from the
+        # original setup wizard. An options-flow strategy change writes to
+        # config_entry.options, so reading only .data here meant a strategy
+        # change via Configure was silently ignored after the resulting
+        # reload (see also select.py's async_added_to_hass, which previously
+        # compounded this by restoring the pre-change value on top of it).
+        self._strategy: str = config_entry.options.get(
+            CONF_STRATEGY, config_entry.data.get(CONF_STRATEGY, DEFAULT_STRATEGY)
+        )
 
         # Shared state
         self._last_action: str = "unknown"
@@ -296,7 +305,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             # Reset direction state so a future strategy switch starts fresh.
             self._current_direction = "standby"
             self._last_action = "off"
-            self._last_reason = "Strategie staat op Uit — geen Modbus writes (handmatige bediening mogelijk)"
+            self._last_reason = "Strategie staat op Uit — geen stuurcommando's (handmatige bediening mogelijk)"
             return self._state_dict()
 
         if strategy == STRATEGY_UPS:
@@ -598,7 +607,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                     self._today_charge_kwh += kwh_this_tick
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
         elif should_discharge(decision, current_soc, min_soc):
             _LOGGER.info("Arbitrage ONTLADEN — SOC=%.1f%%, %s", current_soc, decision.reason)
             if await self._set_battery_power(discharge_power):
@@ -609,7 +618,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                     self._today_discharge_kwh += kwh_this_tick
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
         else:
             if decision.action == "charge" and current_soc >= max_soc:
                 _LOGGER.info("Arbitrage wou laden maar SOC=%.1f%% >= max %.1f%%", current_soc, max_soc)
@@ -665,13 +674,13 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 self._last_action = "charging"
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
         else:
             if await self._set_battery_power(decision.power_w):
                 self._last_action = "discharging"
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
 
         self._last_reason = decision.reason
 
@@ -724,13 +733,13 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 self._last_action = "charging"
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
         else:
             if await self._set_battery_power(decision.power_w):
                 self._last_action = "discharging"
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
 
         self._last_reason = decision.reason
 
@@ -754,7 +763,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 self._last_action = "charging"
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
         else:
             await self._stop_battery()
             self._last_action = "idle"
@@ -781,7 +790,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 self._last_action = "discharging"
             else:
                 self._last_action = "error"
-                decision.reason = f"Modbus-commando geweigerd — {decision.reason}"
+                decision.reason = f"Stuurcommando geweigerd — {decision.reason}"
         else:
             await self._stop_battery()
             self._last_action = "idle"
