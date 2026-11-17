@@ -172,6 +172,18 @@ LOCAL_API_ATTR_DURATION = "duration"
 # is actually safer than the Modbus backend's "persists until overwritten".
 DEFAULT_LOCAL_API_COMMAND_DURATION_S = 300
 
+# Send-throttling for the local API: the Marstek's local UDP API is known to
+# become unstable (dropped CT002 link, unresponsive) under frequent/bursty
+# requests, and the taurgis integration's own docs recommend at most one
+# request per update interval. We only resend set_passive_mode when the
+# commanded power actually changes by more than this many watts, OR when this
+# many seconds have passed since the last send (a keep-alive refresh so the
+# command doesn't hit DEFAULT_LOCAL_API_COMMAND_DURATION_S and auto-expire).
+# The keep-alive interval is kept well below the command duration so a skipped
+# tick never risks the battery falling back to its own default behaviour.
+LOCAL_API_POWER_CHANGE_THRESHOLD_W = 50
+LOCAL_API_KEEPALIVE_INTERVAL_S = 120
+
 # Update intervals
 UPDATE_INTERVAL = 60           # seconds — main coordinator
 PID_UPDATE_INTERVAL = 15       # seconds — PID tick (self_consumption, charge_pv)

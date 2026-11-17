@@ -69,6 +69,8 @@ Select which one you're using under **Control method** in this integration's set
 
 **If you choose Local API**, just install and set up taurgis's integration as documented in its README — it auto-discovers the battery on your network, no extra configuration needed on its side.
 
+> **Note on command frequency:** the Marstek's local UDP API is known to become unstable (dropped CT002 link, unresponsive commands) under frequent or bursty requests. Just Leverage Battery only sends a `set_passive_mode` command when the target power actually changes by a meaningful amount, with an occasional keep-alive refresh so the command doesn't auto-expire in between — not on every tick. Modbus doesn't need this: it already skips re-writing a value that's already correct.
+
 ### 2. Zonneplan ONE (required for arbitrage)
 **[fsaris/home-assistant-zonneplan-one](https://github.com/fsaris/home-assistant-zonneplan-one)**
 

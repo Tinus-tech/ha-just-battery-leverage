@@ -80,6 +80,8 @@ from .const import (
     LOCAL_API_ATTR_POWER,
     LOCAL_API_ATTR_DURATION,
     DEFAULT_LOCAL_API_COMMAND_DURATION_S,
+    LOCAL_API_POWER_CHANGE_THRESHOLD_W,
+    LOCAL_API_KEEPALIVE_INTERVAL_S,
     KEY_BATTERY_SOC,
     KEY_FORCE_MODE,
     KEY_USER_WORK_MODE,
@@ -166,6 +168,17 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
         # Last commanded direction (standby|charge|discharge) — used to detect
         # transitions so _last_active_direction/_last_active_at update correctly.
         self._current_direction: str = "standby"
+
+        # Local API send-throttling: unlike Modbus (which reads back the current
+        # force_mode/power and skips the write if nothing changed), the local API
+        # is a fire-and-forget service call with no state to read back — so we track
+        # what we last sent ourselves and skip repeat calls that wouldn't change
+        # anything. The Marstek's local API is known to become unstable/unresponsive
+        # under frequent or bursty requests (reported CT002 disconnects, dropped
+        # commands), so every call we can skip without changing behaviour is worth
+        # skipping. See _set_battery_power_local_api.
+        self._local_api_last_power: int | None = None
+        self._local_api_last_sent_at: float | None = None
 
         # Last ACTIVE direction (charge|discharge) — survives standby ticks so the
         # pre-action cooldown can detect "we recently did opposite". Updated only
@@ -961,6 +974,29 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Geen Marstek device_id geconfigureerd")
             return False
 
+        # Throttle: skip the call entirely if it wouldn't change anything. A
+        # direction change (charge/discharge/idle) always goes out immediately —
+        # that's safety-relevant. Otherwise skip unless the power changed by more
+        # than the threshold, or the keep-alive window has elapsed (so the
+        # command never silently hits its duration and auto-expires).
+        now = time.monotonic()
+        last_power = self._local_api_last_power
+        last_sent = self._local_api_last_sent_at
+
+        def _sign(value: int) -> int:
+            if value == 0:
+                return 0
+            if value > 0:
+                return 1
+            return -1
+
+        if last_power is not None and last_sent is not None:
+            direction_changed = _sign(power) != _sign(last_power)
+            within_threshold = abs(power - last_power) < LOCAL_API_POWER_CHANGE_THRESHOLD_W
+            within_keepalive = (now - last_sent) < LOCAL_API_KEEPALIVE_INTERVAL_S
+            if not direction_changed and within_threshold and within_keepalive:
+                return True
+
         _diag_write(
             self.config_entry.entry_id,
             f"LOCAL_API set_passive_mode power={power}W duration={DEFAULT_LOCAL_API_COMMAND_DURATION_S}s",
@@ -978,6 +1014,8 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             )
             _LOGGER.info("Marstek Local API: set_passive_mode @ %dW", power)
             _diag_write(self.config_entry.entry_id, f"LOCAL_API_OK power={power}W")
+            self._local_api_last_power = power
+            self._local_api_last_sent_at = now
             return True
         except Exception as exc:
             _LOGGER.exception("Fout bij aansturen Marstek via Local API")
