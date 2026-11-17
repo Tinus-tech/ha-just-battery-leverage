@@ -1,0 +1,24 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Just Leverage Battery icon - light variant (for light/default backgrounds) -->
+  <g>
+    <!-- buy-low arrow (left, green, pointing up) -->
+    <polygon points="40,96 22,128 58,128" fill="#16a34a"/>
+    <rect x="32" y="128" width="16" height="38" rx="5" fill="#16a34a"/>
+
+    <!-- sell-high arrow (right, amber, pointing down) -->
+    <rect x="208" y="96" width="16" height="32" rx="5" fill="#f59e0b"/>
+    <polygon points="198,128 234,128 216,166" fill="#f59e0b"/>
+
+    <!-- battery terminal -->
+    <rect x="114" y="38" width="28" height="22" rx="6" fill="none" stroke="#1e293b" stroke-width="8"/>
+
+    <!-- battery body -->
+    <rect x="86" y="58" width="84" height="152" rx="18" fill="#ffffff" stroke="#1e293b" stroke-width="8"/>
+
+    <!-- charge level bars -->
+    <rect x="119" y="176" width="18" height="14" rx="6" fill="#0ea5e9" opacity="0.25"/>
+    <rect x="119" y="156" width="18" height="16" rx="6" fill="#0ea5e9" opacity="0.45"/>
+    <rect x="119" y="134" width="18" height="18" rx="6" fill="#0ea5e9" opacity="0.7"/>
+    <rect x="119" y="110" width="18" height="20" rx="6" fill="#0ea5e9"/>
+  </g>
+</svg>
