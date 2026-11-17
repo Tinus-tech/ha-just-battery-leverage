@@ -53,7 +53,7 @@
     "step": {
       "init": {
         "title": "Instellingen aanpassen",
-        "description": "Pas de batterij-instellingen en strategie aan.",
+        "description": "Pas de batterij-instellingen en strategie aan. Heeft de strategie extra instellingen, dan krijg je die op het volgende scherm te zien.",
         "data": {
           "control_backend": "Aansturingsmethode",
           "marstek_device_id": "Marstek Device ID",
@@ -61,7 +61,16 @@
           "min_soc": "Minimale SOC %",
           "max_soc": "Maximale SOC %",
           "charge_power": "Laadvermogen (W)",
-          "discharge_power": "Ontlaadvermogen (W)",
+          "discharge_power": "Ontlaadvermogen (W)"
+        },
+        "data_description": {
+          "control_backend": "Hoe deze integratie commando's naar de batterij stuurt. Kies de optie die past bij de begeleidende integratie die je al hebt geïnstalleerd (zie README) — de verkeerde keuze betekent dat de batterij-SOC en commando's niet gevonden worden."
+        }
+      },
+      "strategy_config": {
+        "title": "Strategie-instellingen",
+        "description": "Stel de parameters in voor de gekozen strategie.",
+        "data": {
           "price_sensor": "Elektriciteitsprijssensor",
           "price_forecast_attr": "Forecast attribuut naam",
           "cheap_hours": "Goedkope uren per dag (laden)",
@@ -86,9 +95,6 @@
           "timed_period_c_start": "Periode C start",
           "timed_period_c_end": "Periode C einde",
           "timed_period_c_strategy": "Periode C strategie"
-        },
-        "data_description": {
-          "control_backend": "Hoe deze integratie commando's naar de batterij stuurt. Kies de optie die past bij de begeleidende integratie die je al hebt geïnstalleerd (zie README) — de verkeerde keuze betekent dat de batterij-SOC en commando's niet gevonden worden."
         }
       }
     }

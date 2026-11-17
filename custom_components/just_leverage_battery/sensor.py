@@ -264,7 +264,10 @@ class MarstekTotalProfitSensor(_Base):
         super().__init__(coordinator, config_entry, "total_profit", "total_profit", "mdi:cash-multiple")
         self._attr_native_unit_of_measurement = "EUR"
         self._attr_device_class = SensorDeviceClass.MONETARY
-        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        # MONETARY only allows state_class None or TOTAL (never TOTAL_INCREASING —
+        # a monetary amount is allowed to go down, e.g. a losing trade), so
+        # TOTAL_INCREASING here was an invalid combination HA rejects at validation.
+        self._attr_state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self):

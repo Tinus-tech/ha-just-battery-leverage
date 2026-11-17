@@ -262,19 +262,29 @@ class MarstekBatteryTraderOptionsFlow(config_entries.OptionsFlow):
         current = {**self.config_entry.data, **self.config_entry.options}
 
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        # Toon alle relevante velden op één pagina
-        strategy = current.get(CONF_STRATEGY, DEFAULT_STRATEGY)
-        base = _base_schema(current)
-        extra = _strategy_schema(strategy, current)
-
-        if extra:
-            combined = vol.Schema({**base.schema, **extra.schema})
-        else:
-            combined = base
+            # Carry the full previous config forward so unrelated settings
+            # (e.g. the other strategy's params, still stored but unused)
+            # survive a base-only save, same as the initial config flow.
+            self._data = {**current, **user_input}
+            strategy = user_input.get(CONF_STRATEGY, current.get(CONF_STRATEGY, DEFAULT_STRATEGY))
+            if _strategy_schema(strategy, current) is not None:
+                return await self.async_step_strategy_config()
+            return self.async_create_entry(title="", data=self._data)
 
         return self.async_show_form(
             step_id="init",
-            data_schema=combined,
+            data_schema=_base_schema(current),
+        )
+
+    async def async_step_strategy_config(self, user_input=None):
+        strategy = self._data.get(CONF_STRATEGY, DEFAULT_STRATEGY)
+        schema = _strategy_schema(strategy, self._data)
+
+        if user_input is not None:
+            self._data.update(user_input)
+            return self.async_create_entry(title="", data=self._data)
+
+        return self.async_show_form(
+            step_id="strategy_config",
+            data_schema=schema,
         )

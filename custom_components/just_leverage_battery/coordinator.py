@@ -126,22 +126,27 @@ SOC_UNAVAILABLE_REASON = (
 
 # Persistent diagnostic log — survives HA restarts and log rotation.
 # Each instance appends; entry_id distinguishes instances.
-_DIAG_PATH = "/config/jlb_diag.log"
+_DIAG_FILENAME = "jlb_diag.log"
 _DIAG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB → rotate to .old
 
 
-def _diag_write(entry_id: str, message: str) -> None:
-    """Append a timestamped diagnostic line to the persistent log."""
+def _diag_write(path: str, entry_id: str, message: str) -> None:
+    """Append a timestamped diagnostic line to the persistent log.
+
+    Blocking file I/O — must only be called via hass.async_add_executor_job
+    (see MarstekBatteryTraderCoordinator._diag), never directly from a
+    coroutine running on the event loop.
+    """
     try:
         # Simple rotation: rename file when too big
         try:
-            if os.path.getsize(_DIAG_PATH) > _DIAG_MAX_BYTES:
-                os.replace(_DIAG_PATH, _DIAG_PATH + ".old")
+            if os.path.getsize(path) > _DIAG_MAX_BYTES:
+                os.replace(path, path + ".old")
         except OSError:
             pass
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         short_id = entry_id[:8]
-        with open(_DIAG_PATH, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} [{short_id}] {message}\n")
     except OSError as exc:
         _LOGGER.debug("Kon diag-log niet schrijven: %s", exc)
@@ -386,8 +391,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             current_soc, decision.action, decision.reason,
             decision.plan.is_profitable if decision.plan else None,
         )
-        _diag_write(
-            self.config_entry.entry_id,
+        self._diag(
             f"TICK SOC={current_soc:.1f}% action={decision.action} reason={decision.reason!r}",
         )
 
@@ -454,8 +458,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                                 "Pre-action %s OVERGESLAGEN — laatste %s %.0fs geleden (cooldown %ds)",
                                 next_event_action, opposite, elapsed, DEFAULT_PRE_ACTION_FLIP_COOLDOWN,
                             )
-                            _diag_write(
-                                self.config_entry.entry_id,
+                            self._diag(
                                 f"PREACTION_SKIP target={next_event_action} "
                                 f"last_active={opposite} elapsed={elapsed:.0f}s",
                             )
@@ -469,8 +472,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                     # price can't be read, fail safe and skip pre-action.
                     price_ok = False
                     if current_price_eur is None:
-                        _diag_write(
-                            self.config_entry.entry_id,
+                        self._diag(
                             f"PREACTION_SKIP target={next_event_action} reason=geen actuele prijs",
                         )
                     elif next_event_action == "charge":
@@ -483,8 +485,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                             "van doelprijs €%.3f",
                             next_event_action, current_price_eur, next_event.price_eur,
                         )
-                        _diag_write(
-                            self.config_entry.entry_id,
+                        self._diag(
                             f"PREACTION_SKIP target={next_event_action} "
                             f"current_price={current_price_eur:.3f} target_price={next_event.price_eur:.3f}",
                         )
@@ -515,8 +516,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             self._bottomed_out = False
 
         if self._topped_up and decision.action == "charge":
-            _diag_write(
-                self.config_entry.entry_id,
+            self._diag(
                 f"TOPPED_UP SOC={current_soc:.1f}% >= max {max_soc:.0f}% — "
                 f"laden geblokkeerd tot < {max_soc - DEFAULT_SOC_TOP_UP_DEADBAND:.0f}%",
             )
@@ -526,8 +526,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 f"{max_soc - DEFAULT_SOC_TOP_UP_DEADBAND:.0f}% voor nieuw laadmoment"
             )
         elif self._bottomed_out and decision.action == "discharge":
-            _diag_write(
-                self.config_entry.entry_id,
+            self._diag(
                 f"BOTTOMED_OUT SOC={current_soc:.1f}% <= min {min_soc:.0f}% — "
                 f"ontladen geblokkeerd tot > {min_soc + DEFAULT_SOC_TOP_UP_DEADBAND:.0f}%",
             )
@@ -567,8 +566,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                         "Anti-flip: houd %s vast (%.0fs / %ds minimum), DP wou %s",
                         sticky_action, elapsed, DEFAULT_MIN_ACTION_SECONDS, decision.action,
                     )
-                    _diag_write(
-                        self.config_entry.entry_id,
+                    self._diag(
                         f"STICKY keep={sticky_action} elapsed={elapsed:.0f}s "
                         f"min={DEFAULT_MIN_ACTION_SECONDS}s (DP wanted {decision.action})",
                     )
@@ -583,8 +581,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                         "Anti-flip: %s→%s geblokkeerd (SOC-limiet), blijf idle",
                         sticky_action, decision.action,
                     )
-                    _diag_write(
-                        self.config_entry.entry_id,
+                    self._diag(
                         f"ACTION_BLOCK target={decision.action} last_active={sticky_action} "
                         f"SOC-limit → idle",
                     )
@@ -853,6 +850,22 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
     def _backend(self) -> str:
         return self._get_conf(CONF_CONTROL_BACKEND, DEFAULT_CONTROL_BACKEND)
 
+    def _diag(self, message: str) -> None:
+        """Schedule a diagnostic log write on the executor.
+
+        _diag_write does blocking file I/O (open/write, occasional rotate).
+        Calling it directly from here — an async method running on the event
+        loop — would block all of Home Assistant for the duration of the
+        write. Scheduling it on the executor and not awaiting it keeps this
+        call fire-and-forget, same as before, but off the event loop.
+
+        hass.config.path(...) is also the only correct way to locate the
+        config dir: a hardcoded "/config/..." only happens to work on HA
+        OS/Supervised/Container, not on a Core install in a venv.
+        """
+        path = self.hass.config.path(_DIAG_FILENAME)
+        self.hass.async_add_executor_job(_diag_write, path, self.config_entry.entry_id, message)
+
     def _find_marstek_entity(self, key: str, platform: str | None = None) -> str | None:
         """Find a Marstek entity by its key suffix, for either backend.
 
@@ -997,8 +1010,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             if not direction_changed and within_threshold and within_keepalive:
                 return True
 
-        _diag_write(
-            self.config_entry.entry_id,
+        self._diag(
             f"LOCAL_API set_passive_mode power={power}W duration={DEFAULT_LOCAL_API_COMMAND_DURATION_S}s",
         )
         try:
@@ -1013,13 +1025,13 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 blocking=True,
             )
             _LOGGER.info("Marstek Local API: set_passive_mode @ %dW", power)
-            _diag_write(self.config_entry.entry_id, f"LOCAL_API_OK power={power}W")
+            self._diag(f"LOCAL_API_OK power={power}W")
             self._local_api_last_power = power
             self._local_api_last_sent_at = now
             return True
         except Exception as exc:
             _LOGGER.exception("Fout bij aansturen Marstek via Local API")
-            _diag_write(self.config_entry.entry_id, f"LOCAL_API_ERROR {exc}")
+            self._diag(f"LOCAL_API_ERROR {exc}")
             return False
 
     async def _set_battery_power_modbus(self, power: int) -> bool:
@@ -1068,8 +1080,7 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
             "Marstek observed: force_mode=%s, user_work_mode=%s | target: force_mode=%s @ %dW",
             observed_force_mode, observed_user_mode, target_mode, target_power,
         )
-        _diag_write(
-            self.config_entry.entry_id,
+        self._diag(
             f"OBSERVED force={observed_force_mode} usermode={observed_user_mode} "
             f"ac_power={observed_ac_power}W batt_power={observed_battery_power}W "
             f"| TARGET force={target_mode} @ {target_power}W",
@@ -1113,15 +1124,15 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
 
             if written:
                 _LOGGER.info("Marstek writes: %s", "; ".join(written))
-                _diag_write(self.config_entry.entry_id, f"WRITE {'; '.join(written)}")
+                self._diag(f"WRITE {'; '.join(written)}")
             else:
                 _LOGGER.debug("Marstek %s @ %dW — al juiste state, skip writes",
                               target_mode, target_power)
-                _diag_write(self.config_entry.entry_id, f"SKIP target={target_mode}@{target_power}W (already correct)")
+                self._diag(f"SKIP target={target_mode}@{target_power}W (already correct)")
             return True
         except Exception as exc:
             _LOGGER.exception("Fout bij aansturen Marstek via Modbus")
-            _diag_write(self.config_entry.entry_id, f"ERROR {exc}")
+            self._diag(f"ERROR {exc}")
             return False
 
     def _cached_state(self, entity_id: str) -> str | None:

@@ -53,7 +53,7 @@
     "step": {
       "init": {
         "title": "Adjust settings",
-        "description": "Adjust battery settings and strategy.",
+        "description": "Adjust battery settings and strategy. If the strategy has extra settings, you'll be asked for those on the next screen.",
         "data": {
           "control_backend": "Control method",
           "marstek_device_id": "Marstek Device ID",
@@ -61,7 +61,16 @@
           "min_soc": "Minimum SOC %",
           "max_soc": "Maximum SOC %",
           "charge_power": "Charge power (W)",
-          "discharge_power": "Discharge power (W)",
+          "discharge_power": "Discharge power (W)"
+        },
+        "data_description": {
+          "control_backend": "How this integration sends commands to the battery. Pick the one matching the companion integration you already have installed (see README) — picking the wrong one means the battery SOC and commands won't be found."
+        }
+      },
+      "strategy_config": {
+        "title": "Strategy settings",
+        "description": "Configure the parameters for the selected strategy.",
+        "data": {
           "price_sensor": "Electricity price sensor",
           "price_forecast_attr": "Forecast attribute name",
           "cheap_hours": "Cheap hours per day (charge)",
@@ -86,9 +95,6 @@
           "timed_period_c_start": "Period C start",
           "timed_period_c_end": "Period C end",
           "timed_period_c_strategy": "Period C strategy"
-        },
-        "data_description": {
-          "control_backend": "How this integration sends commands to the battery. Pick the one matching the companion integration you already have installed (see README) — picking the wrong one means the battery SOC and commands won't be found."
         }
       }
     }
