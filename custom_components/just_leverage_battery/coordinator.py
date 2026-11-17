@@ -13,6 +13,9 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DOMAIN,
+    CONF_CONTROL_BACKEND,
+    DEFAULT_CONTROL_BACKEND,
+    BACKEND_LOCAL_API,
     CONF_MARSTEK_DEVICE_ID,
     CONF_PRICE_SENSOR,
     CONF_PRICE_FORECAST_ATTR,
@@ -71,6 +74,12 @@ from .const import (
     DEFAULT_TIMED_PERIOD_A_END,
     DEFAULT_TIMED_PERIOD_A_STRATEGY,
     MARSTEK_MODBUS_DOMAIN,
+    MARSTEK_LOCAL_API_DOMAIN,
+    LOCAL_API_SERVICE_SET_PASSIVE_MODE,
+    LOCAL_API_ATTR_DEVICE_ID,
+    LOCAL_API_ATTR_POWER,
+    LOCAL_API_ATTR_DURATION,
+    DEFAULT_LOCAL_API_COMMAND_DURATION_S,
     KEY_BATTERY_SOC,
     KEY_FORCE_MODE,
     KEY_USER_WORK_MODE,
@@ -828,21 +837,33 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
     def _get_conf(self, key, default):
         return self.config_entry.options.get(key, self.config_entry.data.get(key, default))
 
-    def _find_marstek_entity(self, key: str) -> str | None:
-        """Find a ViperRNMC marstek_modbus entity by its key suffix.
+    def _backend(self) -> str:
+        return self._get_conf(CONF_CONTROL_BACKEND, DEFAULT_CONTROL_BACKEND)
 
-        ViperRNMC unique_ids have format: f"{entry_id}_{key}".
-        We look up entities for the configured device_id and match on the suffix.
+    def _find_marstek_entity(self, key: str, platform: str | None = None) -> str | None:
+        """Find a Marstek entity by its key suffix, for either backend.
+
+        Both ViperRNMC (marstek_modbus) and taurgis (marstek) register their
+        entities with unique_id = f"{some_id}_{key}" — same suffix convention,
+        different platform domain. We look up entities for the configured
+        device_id and match on the suffix; platform defaults to whichever
+        backend is currently configured.
         """
         device_id = self._get_conf(CONF_MARSTEK_DEVICE_ID, None)
         if not device_id:
             return None
+        if platform is None:
+            platform = (
+                MARSTEK_LOCAL_API_DOMAIN
+                if self._backend() == BACKEND_LOCAL_API
+                else MARSTEK_MODBUS_DOMAIN
+            )
 
         ent_reg = er.async_get(self.hass)
         for entry in ent_reg.entities.values():
             if entry.device_id != device_id:
                 continue
-            if entry.platform != MARSTEK_MODBUS_DOMAIN:
+            if entry.platform != platform:
                 continue
             if entry.unique_id and entry.unique_id.endswith(f"_{key}"):
                 return entry.entity_id
@@ -851,7 +872,15 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
     async def _get_soc(self) -> float | None:
         entity_id = self._find_marstek_entity(KEY_BATTERY_SOC)
         if not entity_id:
-            _LOGGER.warning("Marstek battery_soc entity niet gevonden — is ViperRNMC marstek_modbus geïnstalleerd en device_id correct?")
+            backend_hint = (
+                "de taurgis Marstek Local API-integratie"
+                if self._backend() == BACKEND_LOCAL_API
+                else "ViperRNMC marstek_modbus"
+            )
+            _LOGGER.warning(
+                "Marstek battery_soc entity niet gevonden — is %s geïnstalleerd en device_id correct?",
+                backend_hint,
+            )
             return None
 
         state = self.hass.states.get(entity_id)
@@ -901,20 +930,66 @@ class MarstekBatteryTraderCoordinator(DataUpdateCoordinator):
                 self._last_active_at = time.monotonic()
 
     async def _set_battery_power(self, power: int) -> bool:
-        """Set the battery to charge/discharge at the given power via ViperRNMC Modbus.
+        """Set the battery to charge/discharge at the given power.
 
         Convention: power < 0 = charging, power > 0 = discharging, power == 0 = standby.
-        Sends commands every tick — does not check the current Modbus state.
-        Commands go out at full requested power immediately (no ramp-up).
+        Dispatches to the configured control backend (Modbus via ViperRNMC, or
+        the taurgis Marstek Local API) — both use this same sign convention,
+        so every strategy runner above stays backend-agnostic.
 
         Returns True if the command succeeded (or no write was needed because
-        the Marstek was already at the target state), False if the write
-        failed or the force_mode entity could not be found. Callers must
-        check this before reporting "charging"/"discharging" — a rejected
-        Modbus write (e.g. a power value the device refuses) must not be
-        shown as if it succeeded.
+        the Marstek was already at the target state), False otherwise. Callers
+        must check this before reporting "charging"/"discharging" — a rejected
+        command must not be shown as if it succeeded.
         """
         self._track_direction(power)
+        if self._backend() == BACKEND_LOCAL_API:
+            return await self._set_battery_power_local_api(power)
+        return await self._set_battery_power_modbus(power)
+
+    async def _set_battery_power_local_api(self, power: int) -> bool:
+        """Set battery power via the taurgis Marstek Local API integration.
+
+        A single service call (marstek.set_passive_mode) covers charge,
+        discharge, and idle uniformly — negative=charge, positive=discharge,
+        0=idle, matching our own convention exactly. duration is a dead-man's
+        switch: if this integration stops ticking, the command auto-expires
+        instead of running forever (see DEFAULT_LOCAL_API_COMMAND_DURATION_S).
+        """
+        device_id = self._get_conf(CONF_MARSTEK_DEVICE_ID, None)
+        if not device_id:
+            _LOGGER.warning("Geen Marstek device_id geconfigureerd")
+            return False
+
+        _diag_write(
+            self.config_entry.entry_id,
+            f"LOCAL_API set_passive_mode power={power}W duration={DEFAULT_LOCAL_API_COMMAND_DURATION_S}s",
+        )
+        try:
+            await self.hass.services.async_call(
+                MARSTEK_LOCAL_API_DOMAIN,
+                LOCAL_API_SERVICE_SET_PASSIVE_MODE,
+                {
+                    LOCAL_API_ATTR_DEVICE_ID: device_id,
+                    LOCAL_API_ATTR_POWER: power,
+                    LOCAL_API_ATTR_DURATION: DEFAULT_LOCAL_API_COMMAND_DURATION_S,
+                },
+                blocking=True,
+            )
+            _LOGGER.info("Marstek Local API: set_passive_mode @ %dW", power)
+            _diag_write(self.config_entry.entry_id, f"LOCAL_API_OK power={power}W")
+            return True
+        except Exception as exc:
+            _LOGGER.exception("Fout bij aansturen Marstek via Local API")
+            _diag_write(self.config_entry.entry_id, f"LOCAL_API_ERROR {exc}")
+            return False
+
+    async def _set_battery_power_modbus(self, power: int) -> bool:
+        """Set the battery to charge/discharge at the given power via ViperRNMC Modbus.
+
+        Sends commands every tick — does not check the current Modbus state.
+        Commands go out at full requested power immediately (no ramp-up).
+        """
 
         # Determine target. NOTE: when going to idle (power==0) we intentionally do
         # NOT try to write force_mode="stop" — some Marstek firmware/versions reject

@@ -9,6 +9,10 @@ from homeassistant.helpers import selector
 from .const import (
     DOMAIN,
     CONF_MARSTEK_DEVICE_ID,
+    CONF_CONTROL_BACKEND,
+    BACKEND_MODBUS,
+    BACKEND_LOCAL_API,
+    DEFAULT_CONTROL_BACKEND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_FORECAST_ATTR,
     CONF_CHEAP_HOURS,
@@ -75,6 +79,14 @@ STRATEGY_LABELS = {
 
 SUB_STRATEGY_LABELS = {k: v for k, v in STRATEGY_LABELS.items() if k in TIMED_SUB_STRATEGIES}
 
+# Human-readable labels for the control backend (English fallback; translated via strings.json).
+# Each label names the companion integration it requires, since picking the wrong
+# one with that integration not installed means "battery SOC entity not found" at runtime.
+BACKEND_LABELS = {
+    BACKEND_MODBUS: "Modbus TCP (requires: Marstek Venus Modbus by ViperRNMC)",
+    BACKEND_LOCAL_API: "Local API (requires: Marstek Local API by taurgis)",
+}
+
 
 def _number(min_val, max_val, step, unit=None, mode="box"):
     cfg = selector.NumberSelectorConfig(min=min_val, max=max_val, step=step, mode=mode)
@@ -86,6 +98,11 @@ def _number(min_val, max_val, step, unit=None, mode="box"):
 def _base_schema(current: dict) -> vol.Schema:
     """Fields common to all strategies."""
     return vol.Schema({
+        vol.Required(CONF_CONTROL_BACKEND, default=current.get(CONF_CONTROL_BACKEND, DEFAULT_CONTROL_BACKEND)):
+            selector.SelectSelector(selector.SelectSelectorConfig(
+                options=[{"value": k, "label": v} for k, v in BACKEND_LABELS.items()],
+                mode="dropdown",
+            )),
         vol.Required(CONF_MARSTEK_DEVICE_ID, default=current.get(CONF_MARSTEK_DEVICE_ID, "")): str,
         vol.Required(CONF_STRATEGY, default=current.get(CONF_STRATEGY, DEFAULT_STRATEGY)):
             selector.SelectSelector(selector.SelectSelectorConfig(

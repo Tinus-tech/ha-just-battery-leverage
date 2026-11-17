@@ -5,12 +5,16 @@
         "title": "Just Leverage Battery instellen",
         "description": "Koppel je Marstek batterij aan de prijsstrategie.",
         "data": {
+          "control_backend": "Aansturingsmethode",
           "marstek_device_id": "Marstek Device ID (kopieer uit Instellingen > Apparaten)",
           "strategy": "Strategie",
           "min_soc": "Minimale SOC % (niet ontladen hieronder)",
           "max_soc": "Maximale SOC % (niet laden hierboven)",
           "charge_power": "Laadvermogen (W)",
           "discharge_power": "Ontlaadvermogen (W)"
+        },
+        "data_description": {
+          "control_backend": "Hoe deze integratie commando's naar de batterij stuurt. Kies de optie die past bij de begeleidende integratie die je al hebt geïnstalleerd (zie README) — de verkeerde keuze betekent dat de batterij-SOC en commando's niet gevonden worden."
         }
       },
       "strategy_config": {
@@ -51,6 +55,7 @@
         "title": "Instellingen aanpassen",
         "description": "Pas de batterij-instellingen en strategie aan.",
         "data": {
+          "control_backend": "Aansturingsmethode",
           "marstek_device_id": "Marstek Device ID",
           "strategy": "Strategie",
           "min_soc": "Minimale SOC %",
@@ -81,6 +86,9 @@
           "timed_period_c_start": "Periode C start",
           "timed_period_c_end": "Periode C einde",
           "timed_period_c_strategy": "Periode C strategie"
+        },
+        "data_description": {
+          "control_backend": "Hoe deze integratie commando's naar de batterij stuurt. Kies de optie die past bij de begeleidende integratie die je al hebt geïnstalleerd (zie README) — de verkeerde keuze betekent dat de batterij-SOC en commando's niet gevonden worden."
         }
       }
     }

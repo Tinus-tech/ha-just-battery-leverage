@@ -5,12 +5,16 @@
         "title": "Configurar Just Leverage Battery",
         "description": "Conecta tu bateria Marstek a la estrategia de precios.",
         "data": {
+          "control_backend": "Metodo de control",
           "marstek_device_id": "Marstek Device ID (copiar desde Ajustes > Dispositivos)",
           "strategy": "Estrategia",
           "min_soc": "SOC minimo % (no descargar por debajo)",
           "max_soc": "SOC maximo % (no cargar por encima)",
           "charge_power": "Potencia de carga (W)",
           "discharge_power": "Potencia de descarga (W)"
+        },
+        "data_description": {
+          "control_backend": "Como esta integracion envia comandos a la bateria. Elige la opcion que corresponda a la integracion complementaria que ya tengas instalada (ver README) — elegir la incorrecta hace que el SOC y los comandos de la bateria no se encuentren."
         }
       },
       "strategy_config": {
@@ -51,6 +55,7 @@
         "title": "Ajustar configuracion",
         "description": "Ajusta la configuracion de la bateria y la estrategia.",
         "data": {
+          "control_backend": "Metodo de control",
           "marstek_device_id": "Marstek Device ID",
           "strategy": "Estrategia",
           "min_soc": "SOC minimo %",
@@ -81,6 +86,9 @@
           "timed_period_c_start": "Periodo C inicio",
           "timed_period_c_end": "Periodo C fin",
           "timed_period_c_strategy": "Periodo C estrategia"
+        },
+        "data_description": {
+          "control_backend": "Como esta integracion envia comandos a la bateria. Elige la opcion que corresponda a la integracion complementaria que ya tengas instalada (ver README) — elegir la incorrecta hace que el SOC y los comandos de la bateria no se encuentren."
         }
       }
     }

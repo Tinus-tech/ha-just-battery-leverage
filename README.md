@@ -5,7 +5,7 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![GitHub Release](https://img.shields.io/github/v/release/Tinus-tech/ha-just-battery-leverage)](https://github.com/Tinus-tech/ha-just-battery-leverage/releases)
 
-Turn your **Marstek Venus V3** into a battery that trades electricity for you. Just Leverage Battery watches your dynamic price forecast (Zonneplan, Nordpool, or any sensor with hourly/quarter-hourly data), works out the most profitable charge and discharge plan with a proper optimization algorithm, and drives the battery over **Modbus TCP** — no cloud round-trip, no app, no manual button-pressing.
+Turn your **Marstek Venus V3** into a battery that trades electricity for you. Just Leverage Battery watches your dynamic price forecast (Zonneplan, Nordpool, or any sensor with hourly/quarter-hourly data), works out the most profitable charge and discharge plan with a proper optimization algorithm, and drives the battery over **Modbus TCP or the Marstek Local API** (your choice) — no cloud round-trip, no app, no manual button-pressing.
 
 <img src="images/dashboard.png" alt="Just Leverage Battery dashboard" width="100%">
 
@@ -38,7 +38,7 @@ Turn your **Marstek Venus V3** into a battery that trades electricity for you. J
 
 **Safety, always on:**
 - Battery is actively stopped — not left on its last command — if the price sensor, forecast, or SOC reading becomes unavailable
-- A Modbus write is only reported as "charging"/"discharging" after it's confirmed to have succeeded
+- A command is only reported as "charging"/"discharging" after it's confirmed to have succeeded, regardless of control method
 - Configurable min/max SOC, enforced with a deadband so the battery doesn't oscillate right at the limit
 - Charge/discharge power is capped at 2500W, the Marstek Venus E v3's own hardware limit
 
@@ -48,19 +48,26 @@ Turn your **Marstek Venus V3** into a battery that trades electricity for you. J
 
 ## Requirements
 
-Install these integrations first via HACS — **Just Leverage Battery requires both**:
+Install these integrations first via HACS. **Just Leverage Battery needs one of the two control-backend integrations below, plus the price integration**:
 
-### 1. Marstek Venus Modbus (required)
-**[ViperRNMC/marstek_venus_modbus](https://github.com/ViperRNMC/marstek_venus_modbus)**
+### 1. Pick ONE control backend (required)
 
-Provides low-level Modbus TCP communication with the Marstek Venus V3 over ethernet (port 502). Just Leverage Battery uses this to:
-- Read **battery SOC** (State of Charge)
-- Set **force mode** (standby / charge / discharge)
-- Set **charge/discharge power** levels
+Just Leverage Battery never talks to the Marstek directly — it sends commands through one of these two companion integrations. Pick whichever matches your setup; both give identical trading behaviour, so this is purely a "how do I already talk to the battery" choice.
 
-After installing, configure ViperRNMC and set:
+| | Modbus TCP | Local API |
+|---|---|---|
+| Integration | **[ViperRNMC/marstek_venus_modbus](https://github.com/ViperRNMC/marstek_venus_modbus)** | **[taurgis/has-marstek-local-api](https://github.com/taurgis/has-marstek-local-api)** |
+| Connection | Ethernet, Modbus TCP (port 502) | Local network, UDP (Marstek's own "Open API") |
+| Extra hardware | Needs an RS485-to-Ethernet gateway wired to the battery | None — works over the battery's existing Wi-Fi/LAN connection |
+| Setup effort | More wiring, very mature/battle-tested | Simpler, no extra cabling |
+
+Select which one you're using under **Control method** in this integration's setup form (see [Configuration](#configuration)) — pick the wrong one and the integration will log that it can't find the battery's SOC/command entities.
+
+**If you choose Modbus TCP**, after installing ViperRNMC's integration, configure it and set:
 - **RS485 Bedrijfsmodus** (RS485 control mode) → **ON**
 - **Gebruikersmodus** (User work mode) → **Handmatig** (Manual) — the Marstek may reset this to `anti_feed` on its own from time to time; that's normal and the integration's `force_mode` commands still take effect over it.
+
+**If you choose Local API**, just install and set up taurgis's integration as documented in its README — it auto-discovers the battery on your network, no extra configuration needed on its side.
 
 ### 2. Zonneplan ONE (required for arbitrage)
 **[fsaris/home-assistant-zonneplan-one](https://github.com/fsaris/home-assistant-zonneplan-one)**
@@ -95,7 +102,8 @@ Copy the `custom_components/just_leverage_battery` folder to your HA `custom_com
 
 | Field | Description |
 |---|---|
-| **Marstek Device ID** | Copy from Settings > Devices > your Marstek device |
+| **Control method** | **Modbus TCP** or **Local API** — whichever companion integration (see [Requirements](#requirements)) you installed |
+| **Marstek Device ID** | Copy from Settings > Devices > your Marstek device — same device, works identically for either control method |
 | **Strategy** | Select your preferred trading strategy |
 | **Min SOC %** | Minimum battery level — kept as reserve |
 | **Max SOC %** | Maximum charge limit |
@@ -159,14 +167,17 @@ The full plan — per slot: action, price, simulated SOC — plus the expected p
 ```
 Just Leverage Battery (strategy & planning)
         |
-        | HA service calls (select.select_option, number.set_value)
-        v
-ViperRNMC marstek_modbus (Modbus TCP driver)
-        |
-        | Modbus TCP (port 502, ethernet)
-        v
-Marstek Venus V3 battery
+        | Control method: Modbus TCP              | Control method: Local API
+        v                                          v
+ViperRNMC marstek_modbus                  taurgis Marstek Local API
+(select.select_option, number.set_value)  (marstek.set_passive_mode service)
+        |                                          |
+        | Modbus TCP (port 502, ethernet)          | UDP (local network)
+        v                                          v
+             Marstek Venus V3 battery
 ```
+
+Only one control method is active at a time — chosen via the **Control method** setting — but both companion integrations can be installed side by side without conflicting, since they use different Home Assistant domains.
 
 ---
 
@@ -178,7 +189,7 @@ Set the strategy to **Off** and the integration stops sending any Modbus command
 
 ## Finding your Marstek Device ID
 
-1. Go to **Settings > Devices & Services > Marstek Venus Modbus**
+1. Go to **Settings > Devices & Services**, then open whichever control-backend integration you installed (**Marstek Venus Modbus** or **Marstek Local API**)
 2. Click on your battery device
 3. Scroll down and copy the **Device ID**
 
@@ -186,10 +197,10 @@ Set the strategy to **Off** and the integration stops sending any Modbus command
 
 ## License
 
-MIT — use at your own risk. Not affiliated with Marstek, Zonneplan, or ViperRNMC.
+MIT — use at your own risk. Not affiliated with Marstek, Zonneplan, ViperRNMC, or taurgis.
 
 ---
 
 ## Keywords
 
-`home-assistant` `hacs` `marstek` `marstek-venus` `marstek-venus-v3` `marstek-modbus` `battery` `battery-trading` `battery-arbitrage` `energy-arbitrage` `dynamic-programming` `dynamic-pricing` `zonneplan` `nordpool` `modbus-tcp` `solar-battery` `peak-shaving` `self-consumption` `energy-management` `smart-home` `home-battery` `profit-tracking` `thuisbatterij` `bateria-inteligente`
+`home-assistant` `hacs` `marstek` `marstek-venus` `marstek-venus-v3` `marstek-modbus` `marstek-local-api` `battery` `battery-trading` `battery-arbitrage` `energy-arbitrage` `dynamic-programming` `dynamic-pricing` `zonneplan` `nordpool` `modbus-tcp` `solar-battery` `peak-shaving` `self-consumption` `energy-management` `smart-home` `home-battery` `profit-tracking` `thuisbatterij` `bateria-inteligente`

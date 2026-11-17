@@ -34,6 +34,16 @@ TIMED_SUB_STRATEGIES = [
     STRATEGY_OFF,
 ]
 
+# Control backend — which integration actually talks to the Marstek battery.
+# Both backends use the SAME CONF_MARSTEK_DEVICE_ID (the HA device, not an
+# entity) — Settings > Devices & Services > pick the Marstek device > copy
+# Device ID works identically for either.
+CONF_CONTROL_BACKEND = "control_backend"
+BACKEND_MODBUS = "modbus"
+BACKEND_LOCAL_API = "local_api"
+CONTROL_BACKENDS = [BACKEND_MODBUS, BACKEND_LOCAL_API]
+DEFAULT_CONTROL_BACKEND = BACKEND_MODBUS  # preserves existing installs' behaviour
+
 # Config keys — common
 CONF_MARSTEK_DEVICE_ID = "marstek_device_id"
 CONF_MIN_SOC = "min_soc"
@@ -144,6 +154,23 @@ FORCE_MODE_DISCHARGE = "discharge"
 # In "anti_feed" or "trade_mode" the Marstek overrides our force_mode commands,
 # causing oscillation (battery flips between commanded action and anti-feed default).
 USER_WORK_MODE_MANUAL = "manual"
+
+# taurgis/has-marstek-local-api integration (UDP-based local API, no Modbus
+# gateway needed). HA domain is "marstek" — note this is NOT the same as
+# ViperRNMC's "marstek_modbus" domain above; the two integrations can be
+# installed side by side without conflict since they use different domains.
+MARSTEK_LOCAL_API_DOMAIN = "marstek"
+LOCAL_API_SERVICE_SET_PASSIVE_MODE = "set_passive_mode"
+LOCAL_API_ATTR_DEVICE_ID = "device_id"
+LOCAL_API_ATTR_POWER = "power"
+LOCAL_API_ATTR_DURATION = "duration"
+# Passive-mode commands auto-expire after this many seconds unless refreshed.
+# Set well above our own tick interval (60s) so normal operation never lapses,
+# but short enough to act as a dead-man's switch if this integration stops
+# ticking altogether (HA crash, etc.) — the battery falls back to its own
+# default behaviour instead of being stuck on a stale command forever, which
+# is actually safer than the Modbus backend's "persists until overwritten".
+DEFAULT_LOCAL_API_COMMAND_DURATION_S = 300
 
 # Update intervals
 UPDATE_INTERVAL = 60           # seconds — main coordinator
